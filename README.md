@@ -1,19 +1,21 @@
-# Dream Journal (GitHub Pages)
+# Dream Journal
 
-这是一个可直接部署到 GitHub Pages 的静态梦境日记应用（Vite + TypeScript）。
+绿色系梦境日记（女生审美）+ 云端同步 + AI 解梦 + 周/月/年回顾 + AI 编故事。
+
+## 功能
+
+- 绿色疗愈风 UI
+- 梦境记录（内容 + 最近生活关联）
+- 情绪标签支持多选 + 自定义
+- AI 解梦（每条记录单独生成）
+- 周回顾 / 月回顾 / 年回顾（本地统计 + AI 深度回顾）
+- 编故事模块（从勾选梦境生成，内置村上春树风格，限 1000 字内）
+- 云端存储（Supabase 登录后跨设备同步）
 
 ## 本地开发
 
-1. 安装 Node.js 20+
-2. 安装依赖：
-
 ```bash
 npm install
-```
-
-3. 启动开发环境：
-
-```bash
 npm run dev
 ```
 
@@ -23,20 +25,23 @@ npm run dev
 npm run build
 ```
 
-构建后会在 `dist/` 生成站点文件，并自动复制 `404.html`（用于 GitHub Pages 单页回退）。
+## 云端存储配置（Supabase）
 
-## GitHub Pages 发布
+在 Supabase 新建项目后，直接到 SQL Editor 执行：
 
-仓库已包含工作流：`.github/workflows/pages.yml`
+- `scripts/supabase.sql`
 
-发布步骤：
+这个脚本会自动创建 `dream_entries` 表、索引和 RLS 策略（只允许用户访问自己的数据）。
 
-1. 把代码推到 `main` 分支
-2. 打开 GitHub 仓库 `Settings` -> `Pages`
-3. 在 `Build and deployment` 里选择 `GitHub Actions`
-4. 等待 `Deploy to GitHub Pages` 工作流成功
+然后把 Supabase 的 URL 和 Anon Key 填进页面的「账号与云端存储」卡片，使用邮箱魔法链接登录即可跨设备同步。
 
-最终访问地址通常是：
+## AI 配置
 
-`https://<你的GitHub用户名>.github.io/dream-journal/`
+页面内可直接填写 OpenAI 兼容接口：
+
+- endpoint（例如 OpenRouter）
+- API Key
+- model
+
+保存后即可使用 AI 解梦、AI 回顾、AI 编故事。
 
