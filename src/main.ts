@@ -142,7 +142,7 @@ function getAiConfig(): AiConfig {
   return getJson(AI_KEY, {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     apiKey: "",
-    model: "qwen/qwen-2.5-72b-instruct",
+    model: "deepseek/deepseek-chat-v3-0324:free",
   });
 }
 
