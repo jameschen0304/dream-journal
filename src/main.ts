@@ -349,36 +349,43 @@ async function askAi(prompt: string): Promise<string> {
   const cfg = getAiConfig();
   const endpoint = normalizeAiEndpoint(cfg.endpoint);
   if (!endpoint || !cfg.apiKey || !cfg.model) throw new Error("请先保存完整 AI 设置");
-  let resp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify({
-      model: cfg.model,
-      temperature: 0.8,
-      messages: [
-        { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
-        { role: "user", content: prompt },
-      ],
-    }),
+  const payload = JSON.stringify({
+    model: cfg.model,
+    temperature: 0.8,
+    messages: [
+      { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
+      { role: "user", content: prompt },
+    ],
   });
+
+  const postWithTimeout = async (url: string): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 25000);
+    try {
+      return await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+        body: payload,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new Error("AI 请求超时（25秒），请重试或更换模型");
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
+
+  let resp = await postWithTimeout(endpoint);
 
   // Volcengine users often save a partial endpoint in local storage.
   // On 404, retry once with the canonical Ark chat-completions URL.
   if (!resp.ok && resp.status === 404) {
     const fallback = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
     if (endpoint !== fallback) {
-      resp = await fetch(fallback, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-        body: JSON.stringify({
-          model: cfg.model,
-          temperature: 0.8,
-          messages: [
-            { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
-            { role: "user", content: prompt },
-          ],
-        }),
-      });
+      resp = await postWithTimeout(fallback);
     }
   }
   if (!resp.ok) {
