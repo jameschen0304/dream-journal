@@ -61,6 +61,14 @@ function moodWithEmoji(tag: string): string {
   return `${emoji} ${plain}`;
 }
 
+function autoTitleFromContent(content: string): string {
+  const text = content.replace(/\s+/g, " ").trim();
+  if (!text) return "未命名梦境";
+  const cut = text.slice(0, 18);
+  const cleaned = cut.replace(/[,.!?;:，。！？；：]+$/g, "");
+  return cleaned || "未命名梦境";
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -372,6 +380,14 @@ function pickedDreamsForStory(): Dream[] {
 }
 
 function bindEvents(): void {
+  document.querySelector("#dream-content")?.addEventListener("blur", () => {
+    const titleEl = document.querySelector<HTMLInputElement>("#dream-title");
+    const contentEl = document.querySelector<HTMLTextAreaElement>("#dream-content");
+    if (!titleEl || !contentEl) return;
+    if (titleEl.value.trim()) return;
+    titleEl.value = autoTitleFromContent(contentEl.value);
+  });
+
   document.querySelector("#save-supa")?.addEventListener("click", async () => {
     const url = (document.querySelector<HTMLInputElement>("#supa-url")?.value ?? "").trim();
     const key = (document.querySelector<HTMLInputElement>("#supa-key")?.value ?? "").trim();
@@ -422,11 +438,12 @@ function bindEvents(): void {
     ev.preventDefault();
     const id = (document.querySelector<HTMLInputElement>("#dream-id")?.value ?? "").trim() || crypto.randomUUID();
     const old = dreams.find((d) => d.id === id);
+    const finalTitle = (document.querySelector<HTMLInputElement>("#dream-title")?.value ?? "").trim() || autoTitleFromContent((document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim());
     const item: Dream = {
       id,
       user_id: cloudUserId ?? undefined,
       date: (document.querySelector<HTMLInputElement>("#dream-date")?.value ?? "").trim(),
-      title: (document.querySelector<HTMLInputElement>("#dream-title")?.value ?? "").trim(),
+      title: finalTitle,
       content: (document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim(),
       life_context: (document.querySelector<HTMLTextAreaElement>("#dream-life")?.value ?? "").trim(),
       mood_tags: selectedTagsFromForm(),
