@@ -50,6 +50,7 @@ let editingId: string | null = null;
 let statusText = "本地模式";
 let storyResult = "";
 let reviewResult = "";
+let aiTestResult = "";
 
 function escapeHtml(v: string): string {
   return v.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -67,6 +68,15 @@ function autoTitleFromContent(content: string): string {
   const cut = text.slice(0, 18);
   const cleaned = cut.replace(/[,.!?;:，。！？；：]+$/g, "");
   return cleaned || "未命名梦境";
+}
+
+function normalizeAiEndpoint(raw: string): string {
+  const v = raw.trim().replace(/\/+$/, "");
+  if (!v) return "";
+  if (/\/chat\/completions$/i.test(v)) return v;
+  if (/volces\.com\/api\/v3$/i.test(v)) return `${v}/chat/completions`;
+  if (/ark\.cn-beijing\.volces\.com$/i.test(v)) return `${v}/api/v3/chat/completions`;
+  return v;
 }
 
 function nowIso(): string {
@@ -318,7 +328,9 @@ function render(): void {
     </div>
     <div class="row-actions">
       <button class="btn ghost" id="save-ai">保存 AI 设置</button>
+      <button class="btn ghost" id="test-ai">测试 AI 配置</button>
     </div>
+    <div class="output">${escapeHtml(aiTestResult || "可点击“测试 AI 配置”自动检测 Key，并返回可用模型名")}</div>
   </details>
   `;
 
@@ -334,8 +346,9 @@ function selectedTagsFromForm(): string[] {
 
 async function askAi(prompt: string): Promise<string> {
   const cfg = getAiConfig();
-  if (!cfg.endpoint || !cfg.apiKey || !cfg.model) throw new Error("请先保存完整 AI 设置");
-  const resp = await fetch(cfg.endpoint, {
+  const endpoint = normalizeAiEndpoint(cfg.endpoint);
+  if (!endpoint || !cfg.apiKey || !cfg.model) throw new Error("请先保存完整 AI 设置");
+  const resp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
     body: JSON.stringify({
@@ -347,9 +360,31 @@ async function askAi(prompt: string): Promise<string> {
       ],
     }),
   });
-  if (!resp.ok) throw new Error(`AI 请求失败：${resp.status}`);
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      detail = (await resp.text()).slice(0, 300);
+    } catch {
+      detail = "";
+    }
+    throw new Error(`AI 请求失败：${resp.status}${detail ? ` - ${detail}` : ""}`);
+  }
   const json = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
+}
+
+async function fetchAiModels(): Promise<string[]> {
+  const cfg = getAiConfig();
+  if (!cfg.endpoint || !cfg.apiKey) throw new Error("请先填写 AI endpoint 和 API Key");
+  const modelsUrl = cfg.endpoint.replace(/\/chat\/completions\/?$/i, "/models");
+  const resp = await fetch(modelsUrl, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${cfg.apiKey}` },
+  });
+  if (!resp.ok) throw new Error(`模型列表请求失败：${resp.status}`);
+  const json = (await resp.json()) as { data?: Array<{ id?: string }> };
+  const ids = (json.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+  return Array.from(new Set(ids));
 }
 
 function rangeDays(period: ReviewPeriod): number {
@@ -421,12 +456,38 @@ function bindEvents(): void {
   });
 
   document.querySelector("#save-ai")?.addEventListener("click", () => {
+    const endpointRaw = (document.querySelector<HTMLInputElement>("#ai-endpoint")?.value ?? "").trim();
+    const endpoint = normalizeAiEndpoint(endpointRaw);
+    const endpointEl = document.querySelector<HTMLInputElement>("#ai-endpoint");
+    if (endpointEl) endpointEl.value = endpoint;
     saveAiConfig({
-      endpoint: (document.querySelector<HTMLInputElement>("#ai-endpoint")?.value ?? "").trim(),
+      endpoint,
       apiKey: (document.querySelector<HTMLInputElement>("#ai-key")?.value ?? "").trim(),
       model: (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim(),
     });
     alert("AI 设置已保存");
+  });
+
+  document.querySelector("#test-ai")?.addEventListener("click", async () => {
+    try {
+      const models = await fetchAiModels();
+      const current = (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim();
+      const hasCurrent = current && models.includes(current);
+      if (!current && models.length) {
+        const modelEl = document.querySelector<HTMLInputElement>("#ai-model");
+        if (modelEl) modelEl.value = models[0];
+      }
+      aiTestResult = [
+        "连接成功。",
+        `共找到 ${models.length} 个可用模型。`,
+        hasCurrent ? `当前模型可用：${current}` : current ? `当前模型未命中列表：${current}` : `已自动填入模型：${models[0] ?? "未获取到"}`,
+        models.length ? `示例模型：${models.slice(0, 8).join("、")}` : "未返回模型列表",
+      ].join("\n");
+      render();
+    } catch (e) {
+      aiTestResult = e instanceof Error ? e.message : "AI 测试失败";
+      render();
+    }
   });
 
   document.querySelector("#new-dream")?.addEventListener("click", () => {
