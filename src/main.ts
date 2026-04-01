@@ -51,6 +51,7 @@ let statusText = "本地模式";
 let storyResult = "";
 let reviewResult = "";
 let aiTestResult = "";
+let aiBusyId: string | null = null;
 
 function escapeHtml(v: string): string {
   return v.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -224,7 +225,7 @@ function render(): void {
     <pre>${escapeHtml(d.content)}</pre>
     ${d.ai_interpretation ? `<div class="ai-box"><b>AI 解梦：</b>${escapeHtml(d.ai_interpretation)}</div>` : ""}
     <div class="row-actions">
-      <button class="btn" data-action="interpret" data-id="${escapeHtml(d.id)}">AI 解梦</button>
+      <button class="btn" data-action="interpret" data-id="${escapeHtml(d.id)}" ${aiBusyId === d.id ? "disabled" : ""}>${aiBusyId === d.id ? "解梦中..." : "AI 解梦"}</button>
       <button class="btn ghost" data-action="edit" data-id="${escapeHtml(d.id)}">编辑</button>
       <button class="btn danger" data-action="delete" data-id="${escapeHtml(d.id)}">删除</button>
     </div>
@@ -558,14 +559,19 @@ function bindEvents(): void {
       }
       if (action === "interpret") {
         try {
+          aiBusyId = d.id;
+          render();
           d.ai_interpretation = await askAi(
             `请根据以下梦境给出解读，输出结构：1)象征线索 2)与最近生活联系 3)情绪建议(3条)\n\n标题:${d.title}\n日期:${d.date}\n情绪标签:${d.mood_tags.join("、")}\n生活关联:${d.life_context}\n梦境:${d.content}`,
           );
+          if (!d.ai_interpretation.trim()) d.ai_interpretation = "AI 暂未返回内容，请稍后重试。";
           d.updated_at = nowIso();
           await persistDreams();
-          render();
         } catch (e) {
           alert(e instanceof Error ? e.message : "AI 解梦失败");
+        } finally {
+          aiBusyId = null;
+          render();
         }
       }
     });
