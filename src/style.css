@@ -92,19 +92,28 @@ textarea { min-height: 84px; resize: vertical; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 10px; }
 .chip {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 1px solid #bee2ca;
   color: #316e4f;
   background: #ecf9f1;
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 4px 10px;
   font-size: 12px;
 }
 .chip-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 1px dashed #b4ddc2;
   border-radius: 999px;
   padding: 4px 8px;
   color: #2f6b4c;
   font-size: 12px;
+}
+.chip-input input {
+  width: auto;
+  margin: 0;
 }
 
 .hint { margin: 0; color: var(--muted); font-size: 13px; }
@@ -148,3 +157,19 @@ textarea { min-height: 84px; resize: vertical; }
   line-height: 1.5;
 }
 .empty { color: var(--muted); }
+
+.fold summary {
+  cursor: pointer;
+  color: #35694e;
+  font-weight: 600;
+  font-size: 17px;
+  list-style: none;
+}
+.fold summary::-webkit-details-marker { display: none; }
+.fold summary::before {
+  content: "▸";
+  margin-right: 8px;
+  color: #4d8f6a;
+}
+.fold[open] summary::before { content: "▾"; }
+.fold > *:not(summary) { margin-top: 10px; }

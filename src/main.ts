@@ -27,6 +27,18 @@ const SUPABASE_KEY = "dream-journal-supabase";
 const AI_KEY = "dream-journal-ai-config";
 
 const MOOD_PRESETS = ["平静", "焦虑", "愉悦", "失落", "孤独", "期待", "压力", "迷茫", "感动", "愤怒"];
+const MOOD_EMOJI: Record<string, string> = {
+  平静: "😌",
+  焦虑: "😰",
+  愉悦: "😊",
+  失落: "😞",
+  孤独: "🌙",
+  期待: "✨",
+  压力: "🫨",
+  迷茫: "🌫️",
+  感动: "🥹",
+  愤怒: "😠",
+};
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("missing #app");
@@ -41,6 +53,12 @@ let reviewResult = "";
 
 function escapeHtml(v: string): string {
   return v.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function moodWithEmoji(tag: string): string {
+  const plain = tag.trim();
+  const emoji = MOOD_EMOJI[plain] ?? "🫧";
+  return `${emoji} ${plain}`;
 }
 
 function nowIso(): string {
@@ -184,7 +202,7 @@ function render(): void {
       </div>
       <label><input type="checkbox" class="story-pick" data-id="${escapeHtml(d.id)}"/> 选入故事</label>
     </div>
-    <div class="chips">${d.mood_tags.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join("")}</div>
+    <div class="chips">${d.mood_tags.map((t) => `<span class="chip">${escapeHtml(moodWithEmoji(t))}</span>`).join("")}</div>
     <pre>${escapeHtml(d.content)}</pre>
     ${d.ai_interpretation ? `<div class="ai-box"><b>AI 解梦：</b>${escapeHtml(d.ai_interpretation)}</div>` : ""}
     <div class="row-actions">
@@ -204,33 +222,6 @@ function render(): void {
   </header>
 
   <section class="panel">
-    <h2>账号与云端存储</h2>
-    <p class="hint">${escapeHtml(statusText)}</p>
-    <div class="grid2">
-      <div>
-        <label>Supabase URL</label>
-        <input id="supa-url" value="${escapeHtml(supa.url)}" placeholder="https://xxxx.supabase.co" />
-      </div>
-      <div>
-        <label>Supabase Anon Key</label>
-        <input id="supa-key" value="${escapeHtml(supa.anonKey)}" placeholder="eyJ..." />
-      </div>
-    </div>
-    <div class="grid2">
-      <div>
-        <label>邮箱登录（Magic Link）</label>
-        <input id="login-email" placeholder="you@email.com" />
-      </div>
-      <div class="inline-actions">
-        <button class="btn" id="save-supa">保存配置</button>
-        <button class="btn ghost" id="email-login">发送登录链接</button>
-        <button class="btn ghost" id="logout">退出登录</button>
-        <button class="btn ghost" id="sync-now">立即同步</button>
-      </div>
-    </div>
-  </section>
-
-  <section class="panel">
     <h2>${edit ? "编辑梦境" : "记录梦境"}</h2>
     <form id="dream-form">
       <input id="dream-id" type="hidden" value="${edit ? escapeHtml(edit.id) : ""}" />
@@ -244,7 +235,7 @@ function render(): void {
       <textarea id="dream-life" placeholder="例如：最近换工作焦虑、和家人沟通、期待旅行">${escapeHtml(edit?.life_context ?? "")}</textarea>
       <label>情绪标签（可多选）</label>
       <div class="chips editable">
-        ${MOOD_PRESETS.map((t) => `<label class="chip-input"><input type="checkbox" class="mood-check" value="${escapeHtml(t)}" ${edit?.mood_tags.includes(t) ? "checked" : ""}/> ${escapeHtml(t)}</label>`).join("")}
+        ${MOOD_PRESETS.map((t) => `<label class="chip-input"><input type="checkbox" class="mood-check" value="${escapeHtml(t)}" ${edit?.mood_tags.includes(t) ? "checked" : ""}/> ${escapeHtml(moodWithEmoji(t))}</label>`).join("")}
       </div>
       <label>自定义标签（用英文逗号分隔）</label>
       <input id="custom-tags" value="${escapeHtml((edit?.mood_tags ?? []).filter((t) => !MOOD_PRESETS.includes(t)).join(", "))}" placeholder="例如：反复梦, 父亲, 迁徙" />
@@ -253,18 +244,6 @@ function render(): void {
         <button class="btn ghost" type="button" id="new-dream">新建</button>
       </div>
     </form>
-  </section>
-
-  <section class="panel">
-    <h2>AI 设置</h2>
-    <div class="grid3">
-      <div><label>接口地址（OpenAI 兼容）</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
-      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-..."/></div>
-      <div><label>模型</label><input id="ai-model" value="${escapeHtml(ai.model)}"/></div>
-    </div>
-    <div class="row-actions">
-      <button class="btn ghost" id="save-ai">保存 AI 设置</button>
-    </div>
   </section>
 
   <section class="panel">
@@ -294,6 +273,45 @@ function render(): void {
     <h2>梦境列表（${dreams.length}）</h2>
     <div class="list">${listHtml}</div>
   </section>
+
+  <details class="panel fold">
+    <summary>账号与云端存储</summary>
+    <p class="hint">${escapeHtml(statusText)}</p>
+    <div class="grid2">
+      <div>
+        <label>Supabase URL</label>
+        <input id="supa-url" value="${escapeHtml(supa.url)}" placeholder="https://xxxx.supabase.co" />
+      </div>
+      <div>
+        <label>Supabase Anon Key</label>
+        <input id="supa-key" value="${escapeHtml(supa.anonKey)}" placeholder="eyJ..." />
+      </div>
+    </div>
+    <div class="grid2">
+      <div>
+        <label>邮箱登录（Magic Link）</label>
+        <input id="login-email" placeholder="you@email.com" />
+      </div>
+      <div class="inline-actions">
+        <button class="btn" id="save-supa">保存配置</button>
+        <button class="btn ghost" id="email-login">发送登录链接</button>
+        <button class="btn ghost" id="logout">退出登录</button>
+        <button class="btn ghost" id="sync-now">立即同步</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel fold">
+    <summary>AI 设置</summary>
+    <div class="grid3">
+      <div><label>接口地址（OpenAI 兼容）</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
+      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-..."/></div>
+      <div><label>模型</label><input id="ai-model" value="${escapeHtml(ai.model)}"/></div>
+    </div>
+    <div class="row-actions">
+      <button class="btn ghost" id="save-ai">保存 AI 设置</button>
+    </div>
+  </details>
   `;
 
   bindEvents();
@@ -342,7 +360,7 @@ function makeReview(period: ReviewPeriod): string {
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   return [
     `近 ${days} 天共记录 ${target.length} 条梦境。`,
-    `最常见情绪标签：${top.map(([k, v]) => `${k}(${v})`).join("、") || "暂无标签"}`,
+    `最常见情绪标签：${top.map(([k, v]) => `${moodWithEmoji(k)}(${v})`).join("、") || "暂无标签"}`,
     `最近主题标题：${target.slice(0, 4).map((d) => d.title || "无标题").join(" / ")}`,
   ].join("\n");
 }
