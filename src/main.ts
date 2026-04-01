@@ -92,7 +92,10 @@ function saveLocalDreams(list: Dream[]): void {
 }
 
 function getSupabaseConfig(): { url: string; anonKey: string } {
-  return getJson(SUPABASE_KEY, { url: "", anonKey: "" });
+  return getJson(SUPABASE_KEY, {
+    url: "https://alesnpbcjzipocruzpcl.supabase.co",
+    anonKey: "sb_publishable_txVnl9LWAcNiTrByxMqdfQ__cVfSaLf",
+  });
 }
 
 function saveSupabaseConfig(url: string, anonKey: string): void {
