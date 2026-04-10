@@ -290,12 +290,13 @@ function render(): void {
   </section>
 
   <section class="panel">
-    <h2>AI 编故事（<=1000 字）</h2>
-    <p class="hint">先在梦境卡片勾选素材，再点生成。内置风格：村上春树。</p>
+    <h2>故事素材整理</h2>
+    <p class="hint">先在梦境卡片勾选素材，再点「生成素材文本」。本模块不调用 AI，只做整理与复制。</p>
     <div class="row-actions">
-      <button class="btn" id="build-story">生成故事（村上春树风格）</button>
+      <button class="btn" id="build-story">生成素材文本</button>
+      <button class="btn ghost" id="copy-story">复制文本</button>
     </div>
-    <div class="output">${escapeHtml(storyResult || "故事会显示在这里")}</div>
+    <div class="output">${escapeHtml(storyResult || "勾选梦境后可生成可复制的素材文本")}</div>
   </section>
 
   <section class="panel">
@@ -629,6 +630,21 @@ function pickedDreamsForStory(): Dream[] {
   return dreams.filter((d) => set.has(d.id));
 }
 
+function buildStoryMaterialText(picked: Dream[]): string {
+  const blocks = picked.map((d, i) => {
+    const tags = d.mood_tags.length ? d.mood_tags.join("、") : "无";
+    return [
+      `【素材 ${i + 1}】`,
+      `标题：${d.title || "无标题"}`,
+      `日期：${d.date || "未知"}`,
+      `情绪标签：${tags}`,
+      `生活关联：${d.life_context || "（空）"}`,
+      `梦境内容：${d.content || "（空）"}`,
+    ].join("\n");
+  });
+  return [`梦境素材汇总（共 ${picked.length} 条）`, ...blocks].join("\n\n");
+}
+
 function bindEvents(): void {
   document.querySelector("#dream-content")?.addEventListener("blur", () => {
     const titleEl = document.querySelector<HTMLInputElement>("#dream-title");
@@ -791,16 +807,20 @@ function bindEvents(): void {
     }
   });
 
-  document.querySelector("#build-story")?.addEventListener("click", async () => {
+  document.querySelector("#build-story")?.addEventListener("click", () => {
     const picked = pickedDreamsForStory();
     if (!picked.length) return alert("请先勾选至少 1 条梦境");
+    storyResult = buildStoryMaterialText(picked);
+    render();
+  });
+
+  document.querySelector("#copy-story")?.addEventListener("click", async () => {
+    if (!storyResult.trim()) return alert("请先生成素材文本");
     try {
-      storyResult = await askAi(
-        `请使用“村上春树风格”写一篇中文短篇小说（<=1000字），基于这些梦境素材。要求：叙事克制、现实与超现实交织、留白结尾。\n素材：${JSON.stringify(picked)}`,
-      );
-      render();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "生成故事失败");
+      await navigator.clipboard.writeText(storyResult);
+      alert("已复制到剪贴板");
+    } catch {
+      alert("复制失败，请手动全选输出文本复制");
     }
   });
 }
