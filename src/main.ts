@@ -155,7 +155,8 @@ function getAiConfig(): AiConfig {
   const cfg = getJson(AI_KEY, {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     apiKey: "",
-    model: "qwen/qwen3-next-80b-a3b-instruct:free",
+    // 与部分 Qwen :free（如 Venice 路由）错开，降低默认即遇 429 的概率
+    model: "meta-llama/llama-3.3-70b-instruct:free",
   });
   const replacement = DEPRECATED_OPENROUTER_FREE_MODEL[cfg.model];
   if (replacement) {
@@ -408,8 +409,12 @@ function formatProxyErrorBody(parsed: unknown, rawText: string): string {
   };
   if (parsed !== null && typeof parsed === "object") {
     const o = parsed as Record<string, unknown>;
+    const meta = o.metadata;
+    const rawFromMeta =
+      meta !== null && typeof meta === "object" ? asString((meta as Record<string, unknown>).raw) : null;
     const parts = [
       asString(o.message),
+      rawFromMeta,
       asString(o.error),
       asString(o.msg),
       asString(o.hint),
@@ -421,6 +426,24 @@ function formatProxyErrorBody(parsed: unknown, rawText: string): string {
   return clip(fallback || rawText, 400);
 }
 
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const t = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** 始终用 fetch 调 Edge Function，不依赖 supabase-js 是否初始化成功 */
 async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unknown> {
   const supa = getSupabaseConfig();
@@ -428,39 +451,53 @@ async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unkno
     throw new Error("缺少 Supabase URL/Key，无法调用 AI 代理。请展开「账号与云端存储」保存配置。");
   }
   const url = `${supa.url.replace(/\/+$/, "")}/functions/v1/openrouter-proxy`;
+  const maxAttempts = 3;
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 25000);
+  const timer = window.setTimeout(() => controller.abort(), 32000);
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${supa.anonKey}`,
-        apikey: supa.anonKey,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await resp.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text) as unknown;
-    } catch {
-      throw new Error(`代理返回非 JSON：${text.slice(0, 160)}`);
-    }
-    if (!resp.ok) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        const wait = 1800 * attempt;
+        await sleep(wait, controller.signal);
+      }
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${supa.anonKey}`,
+          apikey: supa.anonKey,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const text = await resp.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw new Error(`代理返回非 JSON：${text.slice(0, 160)}`);
+      }
+      if (resp.ok) return parsed;
+
+      const retryable = resp.status === 429 || resp.status === 503;
+      if (retryable && attempt < maxAttempts - 1) continue;
+
       const detail = formatProxyErrorBody(parsed, text);
       let msg = `AI 代理失败（${resp.status}）：${detail}`;
       if (resp.status === 404) {
         msg +=
           "（404 多来自 OpenRouter：请检查模型 ID 是否在设置里填写正确，或到 OpenRouter 模型列表核对当前可用名称。若从未部署过 Edge Function，请确认 Supabase URL 与已部署代理的项目一致。）";
       }
+      if (resp.status === 429) {
+        msg +=
+          "（429 为上游限流：免费模型常共用额度，已自动重试仍失败时请隔几分钟再试、在设置里更换其它 :free 模型，或在 OpenRouter → Settings → Integrations 绑定供应商自有 Key 以单独累计额度。）";
+      }
       throw new Error(msg);
     }
-    return parsed;
+    throw new Error("AI 代理失败：重试用尽");
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error("AI 代理请求超时（25秒）");
+      throw new Error("AI 代理请求超时（约 32 秒，含限流重试）");
     }
     throw err;
   } finally {
