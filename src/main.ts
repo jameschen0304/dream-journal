@@ -346,7 +346,7 @@ function render(): void {
 
   <details class="panel fold">
     <summary>AI 设置</summary>
-    <p class="hint">Gemini（Google AI Studio）：接口可填 <code>https://generativelanguage.googleapis.com/v1beta/openai/chat/completions</code>，也可只填到 <code>…/openai</code> 保存时会自动补全；API Key 填「API 密钥」；模型填如 <code>gemini-2.0-flash</code>（以 Google 文档为准）。若浏览器提示 Failed to fetch，多为官网对网页跨域限制，可改用 OpenRouter 里带 Google/Gemini 的模型。</p>
+    <p class="hint"><strong>Gemini 说明：</strong><code>generativelanguage.googleapis.com</code> 是<strong> API（给程序请求用）</strong>，不是普通网站。若在浏览器地址栏只打开 <code>…/v1beta/openai</code>，常会显示「找不到网页 / 404」，这是正常现象，不代表地址错了。请把<strong>完整接口地址</strong>填在下方并保存，在本应用里点「解梦」等才会发起请求。文档：<a href="https://ai.google.dev/gemini-api/docs/openai" target="_blank" rel="noopener noreferrer">Gemini OpenAI 兼容</a>；密钥在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>。接口示例：<code>https://generativelanguage.googleapis.com/v1beta/openai/chat/completions</code>；模型名以文档为准（如 <code>gemini-2.0-flash</code>）。若应用内报 Failed to fetch，多为浏览器跨域限制，可改用 OpenRouter 上的 Google/Gemini 模型。</p>
     <div class="grid3">
       <div><label>接口地址（OpenAI 兼容）</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
       <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-… 或 Gemini 密钥"/></div>
