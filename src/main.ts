@@ -345,12 +345,12 @@ function selectedTagsFromForm(): string[] {
   return Array.from(new Set([...checked, ...custom]));
 }
 
-/** OpenRouter 在浏览器里要求 Referer / Title，否则 CORS 预检会失败，表现为 Failed to fetch */
+/** OpenRouter 在浏览器里要求 Referer / Title；请求头值必须是 Latin-1，不能含中文 */
 function openRouterExtraHeaders(endpointOrUrl: string): Record<string, string> {
   if (!/openrouter\.ai/i.test(endpointOrUrl)) return {};
   return {
     "HTTP-Referer": `${window.location.origin}/`,
-    "X-Title": "梦境花园",
+    "X-Title": "Dream Journal",
   };
 }
 
