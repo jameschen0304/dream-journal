@@ -51,7 +51,6 @@ let statusText = "本地模式";
 let storyResult = "";
 let reviewResult = "";
 let aiTestResult = "";
-let aiBusyId: string | null = null;
 
 function escapeHtml(v: string): string {
   return v.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -233,9 +232,14 @@ function render(): void {
     </div>
     <div class="chips">${d.mood_tags.map((t) => `<span class="chip">${escapeHtml(moodWithEmoji(t))}</span>`).join("")}</div>
     <pre>${escapeHtml(d.content)}</pre>
-    ${d.ai_interpretation ? `<div class="ai-box"><b>AI 解梦：</b>${escapeHtml(d.ai_interpretation)}</div>` : ""}
+    <div class="ai-box">
+      <b>手动解读：</b>
+      <textarea class="manual-interpret" data-id="${escapeHtml(d.id)}" placeholder="你对这条梦的理解、感受和提醒...">${escapeHtml(d.ai_interpretation || "")}</textarea>
+      <div class="row-actions">
+        <button class="btn ghost" data-action="save-interpret" data-id="${escapeHtml(d.id)}">保存解读</button>
+      </div>
+    </div>
     <div class="row-actions">
-      <button class="btn" data-action="interpret" data-id="${escapeHtml(d.id)}" ${aiBusyId === d.id ? "disabled" : ""}>${aiBusyId === d.id ? "解梦中..." : "AI 解梦"}</button>
       <button class="btn ghost" data-action="edit" data-id="${escapeHtml(d.id)}">编辑</button>
       <button class="btn danger" data-action="delete" data-id="${escapeHtml(d.id)}">删除</button>
     </div>
@@ -247,7 +251,7 @@ function render(): void {
   app.innerHTML = `
   <header>
     <h1>梦境花园</h1>
-    <p>绿色疗愈风 · 云端同步 · AI 解梦 · 周/月/年回顾 · AI 编故事</p>
+    <p>绿色疗愈风 · 云端同步 · 手动解读 · 周/月/年回顾 · 素材整理</p>
   </header>
 
   <section class="panel">
@@ -767,22 +771,13 @@ function bindEvents(): void {
         render();
         return;
       }
-      if (action === "interpret") {
-        try {
-          aiBusyId = d.id;
-          render();
-          d.ai_interpretation = await askAi(
-            `请根据以下梦境给出解读，输出结构：1)象征线索 2)与最近生活联系 3)情绪建议(3条)\n\n标题:${d.title}\n日期:${d.date}\n情绪标签:${d.mood_tags.join("、")}\n生活关联:${d.life_context}\n梦境:${d.content}`,
-          );
-          if (!d.ai_interpretation.trim()) d.ai_interpretation = "AI 暂未返回内容，请稍后重试。";
-          d.updated_at = nowIso();
-          await persistDreams();
-        } catch (e) {
-          alert(e instanceof Error ? e.message : "AI 解梦失败");
-        } finally {
-          aiBusyId = null;
-          render();
-        }
+      if (action === "save-interpret") {
+        const input = document.querySelector<HTMLTextAreaElement>(`.manual-interpret[data-id="${CSS.escape(d.id)}"]`);
+        d.ai_interpretation = (input?.value ?? "").trim();
+        d.updated_at = nowIso();
+        await persistDreams();
+        alert("解读已保存");
+        render();
       }
     });
   });
