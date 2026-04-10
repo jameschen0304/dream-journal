@@ -32,4 +32,4 @@ jobs:
             echo "::error::缺少 Secret：SUPABASE_PROJECT_REF（Supabase 项目 Reference ID，与 *.supabase.co 子域名一致）"
             exit 1
           fi
-          supabase functions deploy openrouter-proxy --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy openrouter-proxy --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt

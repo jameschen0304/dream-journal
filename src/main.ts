@@ -377,6 +377,37 @@ function wrapFetchError(err: unknown): Error {
   return err instanceof Error ? err : new Error(msg);
 }
 
+/** OpenRouter / Supabase 网关常返回嵌套 JSON，避免 String(object) → [object Object] */
+function formatProxyErrorBody(parsed: unknown, rawText: string): string {
+  const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
+  const asString = (v: unknown): string | null => {
+    if (v == null) return null;
+    if (typeof v === "string") return v;
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (typeof v === "object") {
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return String(v);
+      }
+    }
+    return String(v);
+  };
+  if (parsed !== null && typeof parsed === "object") {
+    const o = parsed as Record<string, unknown>;
+    const parts = [
+      asString(o.message),
+      asString(o.error),
+      asString(o.msg),
+      asString(o.hint),
+      asString(o.code),
+    ].filter((s): s is string => Boolean(s));
+    if (parts.length) return parts.join(" · ");
+  }
+  const fallback = asString(parsed);
+  return clip(fallback || rawText, 400);
+}
+
 /** 始终用 fetch 调 Edge Function，不依赖 supabase-js 是否初始化成功 */
 async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unknown> {
   const supa = getSupabaseConfig();
@@ -405,9 +436,13 @@ async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unkno
       throw new Error(`代理返回非 JSON：${text.slice(0, 160)}`);
     }
     if (!resp.ok) {
-      const o = parsed as { error?: string; message?: string };
-      const detail = o?.message || o?.error || text.slice(0, 200);
-      throw new Error(`AI 代理失败（${resp.status}）：${detail}`);
+      const detail = formatProxyErrorBody(parsed, text);
+      let msg = `AI 代理失败（${resp.status}）：${detail}`;
+      if (resp.status === 404) {
+        msg +=
+          "（404 多来自 OpenRouter：请检查模型 ID 是否在设置里填写正确，或到 OpenRouter 模型列表核对当前可用名称。若从未部署过 Edge Function，请确认 Supabase URL 与已部署代理的项目一致。）";
+      }
+      throw new Error(msg);
     }
     return parsed;
   } catch (err) {
