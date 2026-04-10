@@ -146,11 +146,18 @@ function saveSupabaseConfig(url: string, anonKey: string): void {
 }
 
 function getAiConfig(): AiConfig {
-  return getJson(AI_KEY, {
+  const cfg = getJson(AI_KEY, {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     apiKey: "",
-    model: "qwen/qwen3.6-plus-preview:free",
+    model: "qwen/qwen3.6-plus:free",
   });
+  // OpenRouter 已下线 preview 后缀，自动迁移本地已保存的旧模型 ID
+  if (cfg.model === "qwen/qwen3.6-plus-preview:free") {
+    const next = { ...cfg, model: "qwen/qwen3.6-plus:free" };
+    saveAiConfig(next);
+    return next;
+  }
+  return cfg;
 }
 
 function saveAiConfig(cfg: AiConfig): void {
