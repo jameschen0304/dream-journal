@@ -50,7 +50,6 @@ let editingId: string | null = null;
 let statusText = "本地模式";
 let storyResult = "";
 let reviewResult = "";
-let aiTestResult = "";
 
 function escapeHtml(v: string): string {
   return v.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -156,10 +155,6 @@ function getAiConfig(): AiConfig {
   });
 }
 
-function saveAiConfig(cfg: AiConfig): void {
-  setJson(AI_KEY, cfg);
-}
-
 async function initSupabaseFromConfig(): Promise<void> {
   const cfg = getSupabaseConfig();
   if (!cfg.url || !cfg.anonKey) {
@@ -214,7 +209,6 @@ async function removeDreamById(id: string): Promise<void> {
 }
 
 function render(): void {
-  const ai = getAiConfig();
   const supa = getSupabaseConfig();
   const edit = editingId ? dreams.find((d) => d.id === editingId) : null;
   const defaultDate = edit?.date ?? new Date().toISOString().slice(0, 10);
@@ -335,20 +329,6 @@ function render(): void {
     </div>
   </details>
 
-  <details class="panel fold">
-    <summary>AI 设置</summary>
-    <p class="hint"><strong>Gemini 说明：</strong><code>generativelanguage.googleapis.com</code> 是<strong> API（给程序请求用）</strong>，不是普通网站。若在浏览器地址栏只打开 <code>…/v1beta/openai</code>，常会显示「找不到网页 / 404」，这是正常现象，不代表地址错了。请把<strong>完整接口地址</strong>填在下方并保存，在本应用里点「解梦」等才会发起请求。文档：<a href="https://ai.google.dev/gemini-api/docs/openai" target="_blank" rel="noopener noreferrer">Gemini OpenAI 兼容</a>；密钥在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>。接口示例：<code>https://generativelanguage.googleapis.com/v1beta/openai/chat/completions</code>；模型名以文档为准（如 <code>gemini-2.0-flash</code>）。若应用内报 Failed to fetch，多为浏览器跨域限制，可改用 OpenRouter 上的 Google/Gemini 模型。</p>
-    <div class="grid3">
-      <div><label>接口地址（OpenAI 兼容）</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
-      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-… 或 Gemini 密钥"/></div>
-      <div><label>模型</label><input id="ai-model" value="${escapeHtml(ai.model)}"/></div>
-    </div>
-    <div class="row-actions">
-      <button class="btn ghost" id="save-ai">保存 AI 设置</button>
-      <button class="btn ghost" id="test-ai">测试 AI 配置</button>
-    </div>
-    <div class="output">${escapeHtml(aiTestResult || "可点击“测试 AI 配置”自动检测 Key，并返回可用模型名")}</div>
-  </details>
   `;
 
   bindEvents();
@@ -574,39 +554,6 @@ async function askAi(prompt: string): Promise<string> {
   return json.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
 }
 
-async function fetchAiModels(): Promise<string[]> {
-  const cfg = getAiConfig();
-  if (!cfg.endpoint || !cfg.apiKey) throw new Error("请先填写 AI endpoint 和 API Key");
-  const ep = normalizeAiEndpoint(cfg.endpoint) || cfg.endpoint;
-  const modelsUrl = ep.replace(/\/chat\/completions\/?$/i, "/models");
-
-  if (isOpenRouterEndpoint(ep)) {
-    const data = (await callOpenRouterProxy({
-      mode: "models",
-      openrouter_api_key: cfg.apiKey,
-    })) as { data?: Array<{ id?: string }> };
-    const ids = (data.data ?? []).map((m) => m.id ?? "").filter(Boolean);
-    return Array.from(new Set(ids));
-  }
-
-  let resp: Response;
-  try {
-    resp = await fetch(modelsUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${cfg.apiKey}`,
-        ...openRouterExtraHeaders(modelsUrl),
-      },
-    });
-  } catch (err) {
-    throw wrapFetchError(err);
-  }
-  if (!resp.ok) throw new Error(`模型列表请求失败：${resp.status}`);
-  const json = (await resp.json()) as { data?: Array<{ id?: string }> };
-  const ids = (json.data ?? []).map((m) => m.id ?? "").filter(Boolean);
-  return Array.from(new Set(ids));
-}
-
 function rangeDays(period: ReviewPeriod): number {
   if (period === "week") return 7;
   if (period === "month") return 30;
@@ -688,41 +635,6 @@ function bindEvents(): void {
     await loadDreams();
     render();
     alert("同步完成");
-  });
-
-  document.querySelector("#save-ai")?.addEventListener("click", () => {
-    const endpointRaw = (document.querySelector<HTMLInputElement>("#ai-endpoint")?.value ?? "").trim();
-    const endpoint = normalizeAiEndpoint(endpointRaw);
-    const endpointEl = document.querySelector<HTMLInputElement>("#ai-endpoint");
-    if (endpointEl) endpointEl.value = endpoint;
-    saveAiConfig({
-      endpoint,
-      apiKey: (document.querySelector<HTMLInputElement>("#ai-key")?.value ?? "").trim(),
-      model: (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim(),
-    });
-    alert("AI 设置已保存");
-  });
-
-  document.querySelector("#test-ai")?.addEventListener("click", async () => {
-    try {
-      const models = await fetchAiModels();
-      const current = (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim();
-      const hasCurrent = current && models.includes(current);
-      if (!current && models.length) {
-        const modelEl = document.querySelector<HTMLInputElement>("#ai-model");
-        if (modelEl) modelEl.value = models[0];
-      }
-      aiTestResult = [
-        "连接成功。",
-        `共找到 ${models.length} 个可用模型。`,
-        hasCurrent ? `当前模型可用：${current}` : current ? `当前模型未命中列表：${current}` : `已自动填入模型：${models[0] ?? "未获取到"}`,
-        models.length ? `示例模型：${models.slice(0, 8).join("、")}` : "未返回模型列表",
-      ].join("\n");
-      render();
-    } catch (e) {
-      aiTestResult = e instanceof Error ? e.message : "AI 测试失败";
-      render();
-    }
   });
 
   document.querySelector("#new-dream")?.addEventListener("click", () => {
