@@ -75,6 +75,10 @@ function normalizeAiEndpoint(raw: string): string {
   const v = raw.trim().replace(/\/+$/, "");
   if (!v) return "";
   if (/\/chat\/completions$/i.test(v)) return v;
+  // Google Gemini（OpenAI 兼容），见 https://ai.google.dev/gemini-api/docs/openai
+  if (/generativelanguage\.googleapis\.com\/v1beta\/openai\/?$/i.test(v)) {
+    return `${v.replace(/\/+$/, "")}/chat/completions`;
+  }
   if (/volces\.com\/api\/v3$/i.test(v)) return `${v}/chat/completions`;
   if (/ark\.cn-beijing\.volces\.com$/i.test(v)) return `${v}/api/v3/chat/completions`;
   return v;
@@ -342,9 +346,10 @@ function render(): void {
 
   <details class="panel fold">
     <summary>AI 设置</summary>
+    <p class="hint">Gemini（Google AI Studio）：接口可填 <code>https://generativelanguage.googleapis.com/v1beta/openai/chat/completions</code>，也可只填到 <code>…/openai</code> 保存时会自动补全；API Key 填「API 密钥」；模型填如 <code>gemini-2.0-flash</code>（以 Google 文档为准）。若浏览器提示 Failed to fetch，多为官网对网页跨域限制，可改用 OpenRouter 里带 Google/Gemini 的模型。</p>
     <div class="grid3">
       <div><label>接口地址（OpenAI 兼容）</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
-      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-..."/></div>
+      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-… 或 Gemini 密钥"/></div>
       <div><label>模型</label><input id="ai-model" value="${escapeHtml(ai.model)}"/></div>
     </div>
     <div class="row-actions">
@@ -582,7 +587,7 @@ async function fetchAiModels(): Promise<string[]> {
   const cfg = getAiConfig();
   if (!cfg.endpoint || !cfg.apiKey) throw new Error("请先填写 AI endpoint 和 API Key");
   const ep = normalizeAiEndpoint(cfg.endpoint) || cfg.endpoint;
-  const modelsUrl = cfg.endpoint.replace(/\/chat\/completions\/?$/i, "/models");
+  const modelsUrl = ep.replace(/\/chat\/completions\/?$/i, "/models");
 
   if (isOpenRouterEndpoint(ep)) {
     const data = (await callOpenRouterProxy({
