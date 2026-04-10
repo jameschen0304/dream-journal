@@ -128,11 +128,17 @@ function saveLocalDreams(list: Dream[]): void {
   setJson(STORAGE_KEY, sortDreams(list));
 }
 
+const SUPABASE_DEFAULTS = {
+  url: "https://alesnpbcjzipocruzpcl.supabase.co",
+  anonKey: "sb_publishable_txVnl9LWAcNiTrByxMqdfQ__cVfSaLf",
+};
+
 function getSupabaseConfig(): { url: string; anonKey: string } {
-  return getJson(SUPABASE_KEY, {
-    url: "https://alesnpbcjzipocruzpcl.supabase.co",
-    anonKey: "sb_publishable_txVnl9LWAcNiTrByxMqdfQ__cVfSaLf",
-  });
+  const saved = getJson<Partial<{ url: string; anonKey: string }>>(SUPABASE_KEY, {});
+  return {
+    url: (saved.url?.trim() || SUPABASE_DEFAULTS.url).trim(),
+    anonKey: (saved.anonKey?.trim() || SUPABASE_DEFAULTS.anonKey).trim(),
+  };
 }
 
 function saveSupabaseConfig(url: string, anonKey: string): void {
@@ -365,10 +371,53 @@ function wrapFetchError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
   if (/failed to fetch|networkerror|load failed/i.test(msg)) {
     return new Error(
-      "网络请求被拦截（Failed to fetch）。GitHub Pages 上 OpenRouter 常被浏览器拦截，请在 Supabase 部署 Edge Function「openrouter-proxy」后重试（见 README）。",
+      "直连 API 失败（Failed to fetch）。OpenRouter 已改为走 Supabase 代理；若仍失败请检查网络或 Supabase 项目是否可访问。",
     );
   }
   return err instanceof Error ? err : new Error(msg);
+}
+
+/** 始终用 fetch 调 Edge Function，不依赖 supabase-js 是否初始化成功 */
+async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unknown> {
+  const supa = getSupabaseConfig();
+  if (!supa.url || !supa.anonKey) {
+    throw new Error("缺少 Supabase URL/Key，无法调用 AI 代理。请展开「账号与云端存储」保存配置。");
+  }
+  const url = `${supa.url.replace(/\/+$/, "")}/functions/v1/openrouter-proxy`;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 25000);
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${supa.anonKey}`,
+        apikey: supa.anonKey,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await resp.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error(`代理返回非 JSON：${text.slice(0, 160)}`);
+    }
+    if (!resp.ok) {
+      const o = parsed as { error?: string; message?: string };
+      const detail = o?.message || o?.error || text.slice(0, 200);
+      throw new Error(`AI 代理失败（${resp.status}）：${detail}`);
+    }
+    return parsed;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("AI 代理请求超时（25秒）");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 async function askAi(prompt: string): Promise<string> {
@@ -379,31 +428,24 @@ async function askAi(prompt: string): Promise<string> {
     { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
     { role: "user", content: prompt },
   ];
+
+  if (isOpenRouterEndpoint(endpoint)) {
+    const data = (await callOpenRouterProxy({
+      mode: "chat",
+      model: cfg.model,
+      messages,
+      temperature: 0.8,
+      openrouter_api_key: cfg.apiKey,
+    })) as { choices?: Array<{ message?: { content?: string } }>; error?: string };
+    if (data.error) throw new Error(String(data.error));
+    return data.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
+  }
+
   const payload = JSON.stringify({
     model: cfg.model,
     temperature: 0.8,
     messages,
   });
-
-  if (isOpenRouterEndpoint(endpoint) && supabaseClient) {
-    try {
-      const { data, error } = await supabaseClient.functions.invoke("openrouter-proxy", {
-        body: {
-          mode: "chat",
-          model: cfg.model,
-          messages,
-          temperature: 0.8,
-          openrouter_api_key: cfg.apiKey,
-        },
-      });
-      if (!error && data && typeof data === "object" && "choices" in data) {
-        const json = data as { choices?: Array<{ message?: { content?: string } }> };
-        return json.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
-      }
-    } catch {
-      /* fall through to direct fetch */
-    }
-  }
 
   const postHeaders: Record<string, string> = {
     "Content-Type": "application/json",
@@ -454,21 +496,16 @@ async function askAi(prompt: string): Promise<string> {
 async function fetchAiModels(): Promise<string[]> {
   const cfg = getAiConfig();
   if (!cfg.endpoint || !cfg.apiKey) throw new Error("请先填写 AI endpoint 和 API Key");
+  const ep = normalizeAiEndpoint(cfg.endpoint) || cfg.endpoint;
   const modelsUrl = cfg.endpoint.replace(/\/chat\/completions\/?$/i, "/models");
 
-  if (isOpenRouterEndpoint(cfg.endpoint) && supabaseClient) {
-    try {
-      const { data, error } = await supabaseClient.functions.invoke("openrouter-proxy", {
-        body: { mode: "models", openrouter_api_key: cfg.apiKey },
-      });
-      if (!error && data && typeof data === "object" && "data" in data) {
-        const json = data as { data?: Array<{ id?: string }> };
-        const ids = (json.data ?? []).map((m) => m.id ?? "").filter(Boolean);
-        return Array.from(new Set(ids));
-      }
-    } catch {
-      /* fall through */
-    }
+  if (isOpenRouterEndpoint(ep)) {
+    const data = (await callOpenRouterProxy({
+      mode: "models",
+      openrouter_api_key: cfg.apiKey,
+    })) as { data?: Array<{ id?: string }> };
+    const ids = (data.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+    return Array.from(new Set(ids));
   }
 
   let resp: Response;
