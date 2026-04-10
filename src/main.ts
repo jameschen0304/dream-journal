@@ -145,15 +145,21 @@ function saveSupabaseConfig(url: string, anonKey: string): void {
   setJson(SUPABASE_KEY, { url: url.trim(), anonKey: anonKey.trim() });
 }
 
+/** OpenRouter 会下线部分 :free 模型，在此集中迁移本地已保存的旧 ID */
+const DEPRECATED_OPENROUTER_FREE_MODEL: Record<string, string> = {
+  "qwen/qwen3.6-plus-preview:free": "qwen/qwen3-next-80b-a3b-instruct:free",
+  "qwen/qwen3.6-plus:free": "qwen/qwen3-next-80b-a3b-instruct:free",
+};
+
 function getAiConfig(): AiConfig {
   const cfg = getJson(AI_KEY, {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     apiKey: "",
-    model: "qwen/qwen3.6-plus:free",
+    model: "qwen/qwen3-next-80b-a3b-instruct:free",
   });
-  // OpenRouter 已下线 preview 后缀，自动迁移本地已保存的旧模型 ID
-  if (cfg.model === "qwen/qwen3.6-plus-preview:free") {
-    const next = { ...cfg, model: "qwen/qwen3.6-plus:free" };
+  const replacement = DEPRECATED_OPENROUTER_FREE_MODEL[cfg.model];
+  if (replacement) {
+    const next = { ...cfg, model: replacement };
     saveAiConfig(next);
     return next;
   }
