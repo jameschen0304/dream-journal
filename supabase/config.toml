@@ -1,0 +1,3 @@
+# https://supabase.com/docs/guides/functions
+[functions.openrouter-proxy]
+verify_jwt = false

@@ -45,3 +45,18 @@ npm run build
 
 保存后即可使用 AI 解梦、AI 回顾、AI 编故事。
 
+### GitHub Pages + OpenRouter（避免 Failed to fetch）
+
+静态站从浏览器直连 `openrouter.ai` 常被 CORS / 扩展拦截。本项目已支持通过 **Supabase Edge Function** 转发请求（与页面同源策略无关）。
+
+1. 安装 [Supabase CLI](https://supabase.com/docs/guides/cli)，登录并关联项目  
+2. 在项目根目录执行：
+
+```bash
+supabase functions deploy openrouter-proxy --project-ref <你的项目 ref>
+```
+
+3. 部署完成后，只要页面里已配置 Supabase URL + Anon Key（与存梦境同一项目），使用 OpenRouter 时会**自动优先走代理**。
+
+可选：在 Supabase 控制台为该函数设置环境变量 `OPENROUTER_SITE_URL`（你的站点 URL，用于 OpenRouter 的 `HTTP-Referer`）。
+

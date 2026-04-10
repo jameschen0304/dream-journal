@@ -345,9 +345,13 @@ function selectedTagsFromForm(): string[] {
   return Array.from(new Set([...checked, ...custom]));
 }
 
+function isOpenRouterEndpoint(url: string): boolean {
+  return /openrouter\.ai/i.test(url);
+}
+
 /** OpenRouter 在浏览器里要求 Referer / Title；请求头值必须是 Latin-1，不能含中文 */
 function openRouterExtraHeaders(endpointOrUrl: string): Record<string, string> {
-  if (!/openrouter\.ai/i.test(endpointOrUrl)) return {};
+  if (!isOpenRouterEndpoint(endpointOrUrl)) return {};
   return {
     "HTTP-Referer": `${window.location.origin}/`,
     "X-Title": "Dream Journal",
@@ -361,7 +365,7 @@ function wrapFetchError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
   if (/failed to fetch|networkerror|load failed/i.test(msg)) {
     return new Error(
-      "网络请求被拦截（Failed to fetch）。若使用 OpenRouter：请确认已保存 API Key，并暂时关闭广告拦截；仍不行则需用后端代理调用 API。",
+      "网络请求被拦截（Failed to fetch）。GitHub Pages 上 OpenRouter 常被浏览器拦截，请在 Supabase 部署 Edge Function「openrouter-proxy」后重试（见 README）。",
     );
   }
   return err instanceof Error ? err : new Error(msg);
@@ -371,14 +375,35 @@ async function askAi(prompt: string): Promise<string> {
   const cfg = getAiConfig();
   const endpoint = normalizeAiEndpoint(cfg.endpoint);
   if (!endpoint || !cfg.apiKey || !cfg.model) throw new Error("请先保存完整 AI 设置");
+  const messages = [
+    { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
+    { role: "user", content: prompt },
+  ];
   const payload = JSON.stringify({
     model: cfg.model,
     temperature: 0.8,
-    messages: [
-      { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
-      { role: "user", content: prompt },
-    ],
+    messages,
   });
+
+  if (isOpenRouterEndpoint(endpoint) && supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient.functions.invoke("openrouter-proxy", {
+        body: {
+          mode: "chat",
+          model: cfg.model,
+          messages,
+          temperature: 0.8,
+          openrouter_api_key: cfg.apiKey,
+        },
+      });
+      if (!error && data && typeof data === "object" && "choices" in data) {
+        const json = data as { choices?: Array<{ message?: { content?: string } }> };
+        return json.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
+      }
+    } catch {
+      /* fall through to direct fetch */
+    }
+  }
 
   const postHeaders: Record<string, string> = {
     "Content-Type": "application/json",
@@ -430,6 +455,22 @@ async function fetchAiModels(): Promise<string[]> {
   const cfg = getAiConfig();
   if (!cfg.endpoint || !cfg.apiKey) throw new Error("请先填写 AI endpoint 和 API Key");
   const modelsUrl = cfg.endpoint.replace(/\/chat\/completions\/?$/i, "/models");
+
+  if (isOpenRouterEndpoint(cfg.endpoint) && supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient.functions.invoke("openrouter-proxy", {
+        body: { mode: "models", openrouter_api_key: cfg.apiKey },
+      });
+      if (!error && data && typeof data === "object" && "data" in data) {
+        const json = data as { data?: Array<{ id?: string }> };
+        const ids = (json.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+        return Array.from(new Set(ids));
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
   let resp: Response;
   try {
     resp = await fetch(modelsUrl, {
