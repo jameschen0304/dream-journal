@@ -155,6 +155,31 @@ const DEPRECATED_OPENROUTER_FREE_MODEL: Record<string, string> = {
   "qwen/qwen3.6-plus:free": "qwen/qwen3-next-80b-a3b-instruct:free",
 };
 
+const OPENROUTER_BACKUP_FREE_MODELS = [
+  "openai/gpt-oss-20b:free",
+  "google/gemma-3-12b-it:free",
+  "meta-llama/llama-3.2-3b-instruct:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+];
+
+function isOpenRouterRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b429\b|rate[- ]?limit|quota/i.test(msg);
+}
+
+function openRouterModelCandidates(primaryModel: string): string[] {
+  const ordered = [primaryModel, ...OPENROUTER_BACKUP_FREE_MODELS];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ordered) {
+    const m = id.trim();
+    if (!m || seen.has(m)) continue;
+    seen.add(m);
+    result.push(m);
+  }
+  return result;
+}
+
 function getAiConfig(): AiConfig {
   const cfg = getJson(AI_KEY, {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
@@ -520,15 +545,30 @@ async function askAi(prompt: string): Promise<string> {
   ];
 
   if (isOpenRouterEndpoint(endpoint)) {
-    const data = (await callOpenRouterProxy({
-      mode: "chat",
-      model: cfg.model,
-      messages,
-      temperature: 0.8,
-      openrouter_api_key: cfg.apiKey,
-    })) as { choices?: Array<{ message?: { content?: string } }>; error?: string };
-    if (data.error) throw new Error(String(data.error));
-    return data.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
+    const candidates = openRouterModelCandidates(cfg.model);
+    let lastErr: unknown = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const model = candidates[i];
+      try {
+        const data = (await callOpenRouterProxy({
+          mode: "chat",
+          model,
+          messages,
+          temperature: 0.8,
+          openrouter_api_key: cfg.apiKey,
+        })) as { choices?: Array<{ message?: { content?: string } }>; error?: string };
+        if (data.error) throw new Error(String(data.error));
+        const content = data.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
+        if (i === 0) return content;
+        return `${content}\n\n（已自动切换备用模型：${model}）`;
+      } catch (err) {
+        lastErr = err;
+        if (!isOpenRouterRateLimitError(err) || i === candidates.length - 1) {
+          throw err;
+        }
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error("AI 请求失败：备用模型尝试用尽");
   }
 
   const payload = JSON.stringify({
