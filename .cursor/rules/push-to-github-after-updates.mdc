@@ -1,0 +1,14 @@
+---
+description: After code changes in this repo, commit and push to GitHub by default
+alwaysApply: true
+---
+
+# 更新后同步 GitHub
+
+在完成与本项目相关的代码或配置修改后，**默认**执行：
+
+1. `git status` 确认变更；若有未跟踪或已修改文件，用清晰的中文或英文写一条完整句子的 commit message（说明改了什么、为什么）。
+2. `git add` 相关文件并 `git commit`（用户若明确只要暂存、不要提交，则例外）。
+3. `git push` 到当前分支跟踪的 `origin`（若推送失败，根据报错重试或说明需要用户处理的分支/权限问题）。
+
+仅在用户明确说「不要 push」「只改本地」或「不要提交」时跳过推送。

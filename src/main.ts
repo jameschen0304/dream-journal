@@ -103,23 +103,57 @@ function sortDreams(list: Dream[]): Dream[] {
   return [...list].sort((a, b) => `${b.date}${b.created_at}`.localeCompare(`${a.date}${a.created_at}`));
 }
 
+function normalizeMoodTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((t) => (typeof t === "string" ? t : String(t))).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (Array.isArray(parsed)) return normalizeMoodTags(parsed);
+    } catch {
+      /* ignore */
+    }
+    return [s];
+  }
+  return [];
+}
+
 function parseDreamArray(v: unknown): Dream[] {
   if (!Array.isArray(v)) return [];
-  return v.filter((x): x is Dream => {
-    if (!x || typeof x !== "object") return false;
-    const o = x as Record<string, unknown>;
-    return (
-      typeof o.id === "string" &&
-      typeof o.date === "string" &&
-      typeof o.title === "string" &&
-      typeof o.content === "string" &&
-      typeof o.life_context === "string" &&
-      Array.isArray(o.mood_tags) &&
-      typeof o.ai_interpretation === "string" &&
-      typeof o.created_at === "string" &&
-      typeof o.updated_at === "string"
-    );
-  });
+  return v
+    .map((x) => {
+      if (!x || typeof x !== "object") return null;
+      const o = x as Record<string, unknown>;
+      if (
+        typeof o.id !== "string" ||
+        typeof o.date !== "string" ||
+        typeof o.title !== "string" ||
+        typeof o.content !== "string" ||
+        typeof o.life_context !== "string" ||
+        typeof o.ai_interpretation !== "string" ||
+        typeof o.created_at !== "string" ||
+        typeof o.updated_at !== "string"
+      ) {
+        return null;
+      }
+      const mood_tags = normalizeMoodTags(o.mood_tags);
+      return {
+        id: o.id,
+        user_id: typeof o.user_id === "string" ? o.user_id : undefined,
+        date: o.date,
+        title: o.title,
+        content: o.content,
+        life_context: o.life_context,
+        mood_tags,
+        ai_interpretation: o.ai_interpretation,
+        created_at: o.created_at,
+        updated_at: o.updated_at,
+      } satisfies Dream;
+    })
+    .filter((x): x is Dream => x !== null);
 }
 
 function loadLocalDreams(): Dream[] {
@@ -195,7 +229,10 @@ async function persistDreams(): Promise<void> {
   if (supabaseClient && cloudUserId) {
     const rows = dreams.map((d) => ({ ...d, user_id: cloudUserId }));
     const { error } = await supabaseClient.from("dream_entries").upsert(rows, { onConflict: "id" });
-    if (!error) return;
+    if (!error) {
+      saveLocalDreams(dreams);
+      return;
+    }
   }
   saveLocalDreams(dreams);
 }
@@ -337,7 +374,7 @@ function render(): void {
 function selectedTagsFromForm(): string[] {
   const checked = Array.from(document.querySelectorAll<HTMLInputElement>(".mood-check:checked")).map((el) => el.value.trim());
   const customRaw = (document.querySelector<HTMLInputElement>("#custom-tags")?.value ?? "").trim();
-  const custom = customRaw ? customRaw.split(",").map((v) => v.trim()).filter(Boolean) : [];
+  const custom = customRaw ? customRaw.split(/[,，、]/).map((v) => v.trim()).filter(Boolean) : [];
   return Array.from(new Set([...checked, ...custom]));
 }
 
@@ -735,9 +772,15 @@ function bindEvents(): void {
 async function bootstrap(): Promise<void> {
   await initSupabaseFromConfig();
   if (supabaseClient) {
-    supabaseClient.auth.onAuthStateChange(async (_evt, session) => {
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
       cloudUserId = session?.user?.id ?? null;
       statusText = cloudUserId ? `云端模式（${session?.user?.email ?? "已登录"}）` : "云端已配置（未登录）";
+      // Token refresh must not reload from server: it races with in-flight upsert and can
+      // briefly show stale rows (e.g. new dream with mood_tags “disappearing” after save).
+      if (event === "TOKEN_REFRESHED") {
+        render();
+        return;
+      }
       await loadDreams();
       render();
     });
