@@ -18,6 +18,8 @@ type ReviewPeriod = "week" | "month" | "year";
 
 const STORAGE_KEY = "dream-journal-v2";
 const SUPABASE_KEY = "dream-journal-supabase";
+/** 云端标题清空迁移（每台浏览器一次；失败则下次再试） */
+const TITLE_STRIP_FLAG = "dream-journal-title-strip-v1";
 
 const MOOD_PRESETS = ["平静", "焦虑", "愉悦", "失落", "孤独", "期待", "压力", "迷茫", "感动", "愤怒"];
 const MOOD_EMOJI: Record<string, string> = {
@@ -197,6 +199,19 @@ async function initSupabaseFromConfig(): Promise<void> {
   }
 }
 
+async function stripLegacyTitlesFromStores(): Promise<void> {
+  dreams = dreams.map((d) => ({ ...d, title: "" }));
+  saveLocalDreams(dreams);
+
+  if (!supabaseClient || !cloudUserId) return;
+  if (getJson<{ done?: boolean }>(TITLE_STRIP_FLAG, {}).done) return;
+
+  const { cloudSynced } = await persistDreams();
+  if (cloudSynced !== false) {
+    setJson(TITLE_STRIP_FLAG, { done: true });
+  }
+}
+
 async function loadDreams(): Promise<void> {
   if (supabaseClient && cloudUserId) {
     const { data, error } = await supabaseClient
@@ -207,10 +222,12 @@ async function loadDreams(): Promise<void> {
       .order("created_at", { ascending: false });
     if (!error && Array.isArray(data)) {
       dreams = sortDreams(parseDreamArray(data));
+      await stripLegacyTitlesFromStores();
       return;
     }
   }
   dreams = loadLocalDreams();
+  await stripLegacyTitlesFromStores();
 }
 
 /** null = 未使用云端；true/false = 已登录时本次是否写入云端成功 */
