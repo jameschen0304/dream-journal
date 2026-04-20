@@ -281,14 +281,20 @@ function render(): void {
     <div class="dream-top">
       <div>
         <h3>${escapeHtml(d.date)}</h3>
-        <p>${escapeHtml(d.life_context || "未填写生活关联")}</p>
       </div>
       <label><input type="checkbox" class="story-pick" data-id="${escapeHtml(d.id)}"/> 选入故事</label>
     </div>
     <div class="chips">${d.mood_tags.map((t) => `<span class="chip">${escapeHtml(moodWithEmoji(t))}</span>`).join("")}</div>
-    <pre>${escapeHtml(d.content)}</pre>
+    <div class="dream-section">
+      <div class="dream-section-label">梦境</div>
+      <pre>${escapeHtml(d.content)}</pre>
+    </div>
+    <div class="dream-section dream-life">
+      <div class="dream-section-label">最近生活联系</div>
+      <p>${escapeHtml(d.life_context || "未填写")}</p>
+    </div>
     <div class="interpret-box">
-      <b>手动解读：</b>
+      <b>解读：</b>
       <textarea class="manual-interpret" data-id="${escapeHtml(d.id)}" placeholder="你对这条梦的理解、感受和提醒...">${escapeHtml(d.ai_interpretation || "")}</textarea>
       <div class="row-actions">
         <button type="button" class="btn ghost" data-action="save-interpret" data-id="${escapeHtml(d.id)}">保存解读</button>
