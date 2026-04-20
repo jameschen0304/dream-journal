@@ -18,8 +18,12 @@ type ReviewPeriod = "week" | "month" | "year";
 
 const STORAGE_KEY = "dream-journal-v2";
 const SUPABASE_KEY = "dream-journal-supabase";
-/** 云端标题清空迁移（每台浏览器一次；失败则下次再试） */
-const TITLE_STRIP_FLAG = "dream-journal-title-strip-v1";
+/** 云端标题清空迁移（按登录用户各一次；失败则下次再试） */
+const TITLE_STRIP_PREFIX = "dream-journal-title-strip-v1";
+
+function titleStripStorageKey(userId: string): string {
+  return `${TITLE_STRIP_PREFIX}:${userId}`;
+}
 
 const MOOD_PRESETS = ["平静", "焦虑", "愉悦", "失落", "孤独", "期待", "压力", "迷茫", "感动", "愤怒"];
 const MOOD_EMOJI: Record<string, string> = {
@@ -204,11 +208,12 @@ async function stripLegacyTitlesFromStores(): Promise<void> {
   saveLocalDreams(dreams);
 
   if (!supabaseClient || !cloudUserId) return;
-  if (getJson<{ done?: boolean }>(TITLE_STRIP_FLAG, {}).done) return;
+  const stripKey = titleStripStorageKey(cloudUserId);
+  if (getJson<{ done?: boolean }>(stripKey, {}).done) return;
 
   const { cloudSynced } = await persistDreams();
   if (cloudSynced !== false) {
-    setJson(TITLE_STRIP_FLAG, { done: true });
+    setJson(stripKey, { done: true });
   }
 }
 
@@ -255,7 +260,11 @@ async function persistDreams(): Promise<PersistResult> {
 async function removeDreamById(id: string): Promise<void> {
   dreams = dreams.filter((d) => d.id !== id);
   if (supabaseClient && cloudUserId) {
-    await supabaseClient.from("dream_entries").delete().eq("id", id).eq("user_id", cloudUserId);
+    try {
+      await supabaseClient.from("dream_entries").delete().eq("id", id).eq("user_id", cloudUserId);
+    } catch {
+      /* 本地已删；云端删除失败时下次同步可再试或需用户点同步 */
+    }
   }
   saveLocalDreams(dreams);
 }
@@ -396,10 +405,29 @@ function rangeDays(period: ReviewPeriod): number {
   return 365;
 }
 
+/** 将 YYYY-MM-DD 按本地日历解析为当天 0 点的毫秒数，避免仅用 Date.parse 的时区偏差 */
+function localDayStartMs(dateStr: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(da)) return null;
+  const t = new Date(y, mo - 1, da).setHours(0, 0, 0, 0);
+  return Number.isFinite(t) ? t : null;
+}
+
+function dreamInLastCalendarDays(d: Dream, days: number): boolean {
+  const dreamMs = localDayStartMs(d.date);
+  if (dreamMs == null) return false;
+  const todayMs = new Date().setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((todayMs - dreamMs) / (24 * 3600 * 1000));
+  return diffDays >= 0 && diffDays < days;
+}
+
 function makeReview(period: ReviewPeriod): string {
   const days = rangeDays(period);
-  const now = Date.now();
-  const target = dreams.filter((d) => now - new Date(d.date).getTime() <= days * 24 * 3600 * 1000);
+  const target = dreams.filter((d) => dreamInLastCalendarDays(d, days));
   if (!target.length) return `近 ${days} 天没有记录。`;
   const freq = new Map<string, number>();
   for (const d of target) for (const t of d.mood_tags) freq.set(t, (freq.get(t) ?? 0) + 1);
