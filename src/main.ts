@@ -54,14 +54,6 @@ function moodWithEmoji(tag: string): string {
   return `${emoji} ${plain}`;
 }
 
-function autoTitleFromContent(content: string): string {
-  const text = content.replace(/\s+/g, " ").trim();
-  if (!text) return "未命名梦境";
-  const cut = text.slice(0, 18);
-  const cleaned = cut.replace(/[,.!?;:，。！？；：]+$/g, "");
-  return cleaned || "未命名梦境";
-}
-
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -137,7 +129,7 @@ function parseDreamArray(v: unknown): Dream[] {
         id,
         user_id: typeof o.user_id === "string" ? o.user_id : undefined,
         date,
-        title: asStringField(o.title),
+        title: "",
         content,
         life_context: asStringField(o.life_context),
         mood_tags,
@@ -262,8 +254,8 @@ function render(): void {
           (d) => `<article class="dream-card">
     <div class="dream-top">
       <div>
-        <h3>${escapeHtml(d.title || "无标题")}</h3>
-        <p>${escapeHtml(d.date)} · ${escapeHtml(d.life_context || "未填写生活关联")}</p>
+        <h3>${escapeHtml(d.date)}</h3>
+        <p>${escapeHtml(d.life_context || "未填写生活关联")}</p>
       </div>
       <label><input type="checkbox" class="story-pick" data-id="${escapeHtml(d.id)}"/> 选入故事</label>
     </div>
@@ -295,10 +287,8 @@ function render(): void {
     <h2>${edit ? "编辑梦境" : "记录梦境"}</h2>
     <form id="dream-form">
       <input id="dream-id" type="hidden" value="${edit ? escapeHtml(edit.id) : ""}" />
-      <div class="grid2">
-        <div><label>日期</label><input type="date" id="dream-date" required value="${escapeHtml(defaultDate)}"/></div>
-        <div><label>标题</label><input id="dream-title" placeholder="例如：绿色地铁站" value="${escapeHtml(edit?.title ?? "")}"/></div>
-      </div>
+      <label>日期</label>
+      <input type="date" id="dream-date" required value="${escapeHtml(defaultDate)}"/>
       <label>梦境内容</label>
       <textarea id="dream-content" required placeholder="尽量具体：场景、人物、情节、感受">${escapeHtml(edit?.content ?? "")}</textarea>
       <label>与最近生活的联系</label>
@@ -400,7 +390,7 @@ function makeReview(period: ReviewPeriod): string {
   return [
     `近 ${days} 天共记录 ${target.length} 条梦境。`,
     `最常见情绪标签：${top.map(([k, v]) => `${moodWithEmoji(k)}(${v})`).join("、") || "暂无标签"}`,
-    `最近主题标题：${target.slice(0, 4).map((d) => d.title || "无标题").join(" / ")}`,
+    `最近记录日期：${target.slice(0, 4).map((d) => d.date).join("、")}`,
   ].join("\n");
 }
 
@@ -415,7 +405,6 @@ function buildStoryMaterialText(picked: Dream[]): string {
     const tags = d.mood_tags.length ? d.mood_tags.join("、") : "无";
     return [
       `【素材 ${i + 1}】`,
-      `标题：${d.title || "无标题"}`,
       `日期：${d.date || "未知"}`,
       `情绪标签：${tags}`,
       `生活关联：${d.life_context || "（空）"}`,
@@ -426,14 +415,6 @@ function buildStoryMaterialText(picked: Dream[]): string {
 }
 
 function bindEvents(): void {
-  document.querySelector("#dream-content")?.addEventListener("blur", () => {
-    const titleEl = document.querySelector<HTMLInputElement>("#dream-title");
-    const contentEl = document.querySelector<HTMLTextAreaElement>("#dream-content");
-    if (!titleEl || !contentEl) return;
-    if (titleEl.value.trim()) return;
-    titleEl.value = autoTitleFromContent(contentEl.value);
-  });
-
   document.querySelector("#save-supa")?.addEventListener("click", async () => {
     const url = (document.querySelector<HTMLInputElement>("#supa-url")?.value ?? "").trim();
     const key = (document.querySelector<HTMLInputElement>("#supa-key")?.value ?? "").trim();
@@ -476,14 +457,11 @@ function bindEvents(): void {
     try {
       const id = (document.querySelector<HTMLInputElement>("#dream-id")?.value ?? "").trim() || crypto.randomUUID();
       const old = dreams.find((d) => d.id === id);
-      const finalTitle =
-        (document.querySelector<HTMLInputElement>("#dream-title")?.value ?? "").trim() ||
-        autoTitleFromContent((document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim());
       const item: Dream = {
         id,
         user_id: cloudUserId ?? undefined,
         date: (document.querySelector<HTMLInputElement>("#dream-date")?.value ?? "").trim(),
-        title: finalTitle,
+        title: "",
         content: (document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim(),
         life_context: (document.querySelector<HTMLTextAreaElement>("#dream-life")?.value ?? "").trim(),
         mood_tags: selectedTagsFromForm(),

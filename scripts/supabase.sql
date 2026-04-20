@@ -7,7 +7,7 @@ create table if not exists public.dream_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   date text not null,
-  title text not null default '',
+  title text not null default '', -- 保留列兼容旧库；应用不再使用标题，始终写入空字符串
   content text not null,
   life_context text not null default '',
   mood_tags jsonb not null default '[]'::jsonb,
