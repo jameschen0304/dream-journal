@@ -226,13 +226,17 @@ async function loadDreams(): Promise<void> {
 }
 
 async function persistDreams(): Promise<void> {
-  if (supabaseClient && cloudUserId) {
-    const rows = dreams.map((d) => ({ ...d, user_id: cloudUserId }));
-    const { error } = await supabaseClient.from("dream_entries").upsert(rows, { onConflict: "id" });
-    if (!error) {
-      saveLocalDreams(dreams);
-      return;
+  try {
+    if (supabaseClient && cloudUserId) {
+      const rows = dreams.map((d) => ({ ...d, user_id: cloudUserId }));
+      const { error } = await supabaseClient.from("dream_entries").upsert(rows, { onConflict: "id" });
+      if (!error) {
+        saveLocalDreams(dreams);
+        return;
+      }
     }
+  } catch {
+    // Network / transient Supabase errors should not block local journaling.
   }
   saveLocalDreams(dreams);
 }
@@ -681,26 +685,33 @@ function bindEvents(): void {
 
   document.querySelector("#dream-form")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const id = (document.querySelector<HTMLInputElement>("#dream-id")?.value ?? "").trim() || crypto.randomUUID();
-    const old = dreams.find((d) => d.id === id);
-    const finalTitle = (document.querySelector<HTMLInputElement>("#dream-title")?.value ?? "").trim() || autoTitleFromContent((document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim());
-    const item: Dream = {
-      id,
-      user_id: cloudUserId ?? undefined,
-      date: (document.querySelector<HTMLInputElement>("#dream-date")?.value ?? "").trim(),
-      title: finalTitle,
-      content: (document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim(),
-      life_context: (document.querySelector<HTMLTextAreaElement>("#dream-life")?.value ?? "").trim(),
-      mood_tags: selectedTagsFromForm(),
-      ai_interpretation: old?.ai_interpretation ?? "",
-      created_at: old?.created_at ?? nowIso(),
-      updated_at: nowIso(),
-    };
-    if (!item.date || !item.content) return alert("日期和梦境内容必填");
-    dreams = sortDreams([...dreams.filter((d) => d.id !== item.id), item]);
-    await persistDreams();
-    editingId = null;
-    render();
+    try {
+      const id = (document.querySelector<HTMLInputElement>("#dream-id")?.value ?? "").trim() || crypto.randomUUID();
+      const old = dreams.find((d) => d.id === id);
+      const finalTitle =
+        (document.querySelector<HTMLInputElement>("#dream-title")?.value ?? "").trim() ||
+        autoTitleFromContent((document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim());
+      const item: Dream = {
+        id,
+        user_id: cloudUserId ?? undefined,
+        date: (document.querySelector<HTMLInputElement>("#dream-date")?.value ?? "").trim(),
+        title: finalTitle,
+        content: (document.querySelector<HTMLTextAreaElement>("#dream-content")?.value ?? "").trim(),
+        life_context: (document.querySelector<HTMLTextAreaElement>("#dream-life")?.value ?? "").trim(),
+        mood_tags: selectedTagsFromForm(),
+        ai_interpretation: old?.ai_interpretation ?? "",
+        created_at: old?.created_at ?? nowIso(),
+        updated_at: nowIso(),
+      };
+      if (!item.date || !item.content) return alert("日期和梦境内容必填");
+      dreams = sortDreams([...dreams.filter((d) => d.id !== item.id), item]);
+      await persistDreams();
+      editingId = null;
+      render();
+      alert("记录已保存");
+    } catch (e) {
+      alert(e instanceof Error ? `保存失败：${e.message}` : "保存失败，请重试");
+    }
   });
 
   document.querySelectorAll<HTMLElement>("[data-action]").forEach((el) => {
