@@ -16,15 +16,8 @@ type Dream = {
 
 type ReviewPeriod = "week" | "month" | "year";
 
-type AiConfig = {
-  endpoint: string;
-  apiKey: string;
-  model: string;
-};
-
 const STORAGE_KEY = "dream-journal-v2";
 const SUPABASE_KEY = "dream-journal-supabase";
-const AI_KEY = "dream-journal-ai-config";
 
 const MOOD_PRESETS = ["平静", "焦虑", "愉悦", "失落", "孤独", "期待", "压力", "迷茫", "感动", "愤怒"];
 const MOOD_EMOJI: Record<string, string> = {
@@ -67,19 +60,6 @@ function autoTitleFromContent(content: string): string {
   const cut = text.slice(0, 18);
   const cleaned = cut.replace(/[,.!?;:，。！？；：]+$/g, "");
   return cleaned || "未命名梦境";
-}
-
-function normalizeAiEndpoint(raw: string): string {
-  const v = raw.trim().replace(/\/+$/, "");
-  if (!v) return "";
-  if (/\/chat\/completions$/i.test(v)) return v;
-  // Google Gemini（OpenAI 兼容），见 https://ai.google.dev/gemini-api/docs/openai
-  if (/generativelanguage\.googleapis\.com\/v1beta\/openai\/?$/i.test(v)) {
-    return `${v.replace(/\/+$/, "")}/chat/completions`;
-  }
-  if (/volces\.com\/api\/v3$/i.test(v)) return `${v}/chat/completions`;
-  if (/ark\.cn-beijing\.volces\.com$/i.test(v)) return `${v}/api/v3/chat/completions`;
-  return v;
 }
 
 function nowIso(): string {
@@ -205,18 +185,6 @@ function saveSupabaseConfig(url: string, anonKey: string): void {
   setJson(SUPABASE_KEY, { url: url.trim(), anonKey: anonKey.trim() });
 }
 
-function getAiConfig(): AiConfig {
-  return getJson(AI_KEY, {
-    endpoint: "https://openrouter.ai/api/v1/chat/completions",
-    apiKey: "",
-    model: "",
-  });
-}
-
-function saveAiConfig(cfg: AiConfig): void {
-  setJson(AI_KEY, cfg);
-}
-
 async function initSupabaseFromConfig(): Promise<void> {
   const cfg = getSupabaseConfig();
   if (!cfg.url || !cfg.anonKey) {
@@ -285,7 +253,6 @@ async function removeDreamById(id: string): Promise<void> {
 
 function render(): void {
   const supa = getSupabaseConfig();
-  const ai = getAiConfig();
   const edit = editingId ? dreams.find((d) => d.id === editingId) : null;
   const defaultDate = edit?.date ?? new Date().toISOString().slice(0, 10);
 
@@ -302,7 +269,7 @@ function render(): void {
     </div>
     <div class="chips">${d.mood_tags.map((t) => `<span class="chip">${escapeHtml(moodWithEmoji(t))}</span>`).join("")}</div>
     <pre>${escapeHtml(d.content)}</pre>
-    <div class="ai-box">
+    <div class="interpret-box">
       <b>手动解读：</b>
       <textarea class="manual-interpret" data-id="${escapeHtml(d.id)}" placeholder="你对这条梦的理解、感受和提醒...">${escapeHtml(d.ai_interpretation || "")}</textarea>
       <div class="row-actions">
@@ -358,14 +325,13 @@ function render(): void {
         <option value="year">近 365 天</option>
       </select>
       <button type="button" class="btn" id="run-review">生成回顾</button>
-      <button type="button" class="btn ghost" id="run-review-ai">AI 深度回顾</button>
     </div>
     <div class="output">${escapeHtml(reviewResult || "点击生成回顾")}</div>
   </section>
 
   <section class="panel">
     <h2>故事素材整理</h2>
-    <p class="hint">先在梦境卡片勾选素材，再点「生成素材文本」。本模块不调用 AI，只做整理与复制。</p>
+    <p class="hint">先在梦境卡片勾选素材，再点「生成素材文本」，便于复制到其它工具里继续创作。</p>
     <div class="row-actions">
       <button type="button" class="btn" id="build-story">生成素材文本</button>
       <button type="button" class="btn ghost" id="copy-story">复制文本</button>
@@ -405,19 +371,6 @@ function render(): void {
     </div>
   </details>
 
-  <details class="panel fold">
-    <summary>AI 设置（可选，用于「AI 深度回顾」）</summary>
-    <p class="hint">OpenRouter 等密钥仅存于本机浏览器。走项目自带 Supabase 代理时无需担心 CORS。</p>
-    <div class="grid3">
-      <div><label>接口地址</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
-      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-or-..." autocomplete="off"/></div>
-      <div><label>模型 ID</label><input id="ai-model" value="${escapeHtml(ai.model)}" placeholder="例如 openai/gpt-4o-mini"/></div>
-    </div>
-    <div class="row-actions">
-      <button type="button" class="btn ghost" id="save-ai">保存 AI 设置</button>
-    </div>
-  </details>
-
   `;
 
   bindEvents();
@@ -428,219 +381,6 @@ function selectedTagsFromForm(): string[] {
   const customRaw = (document.querySelector<HTMLInputElement>("#custom-tags")?.value ?? "").trim();
   const custom = customRaw ? customRaw.split(/[,，、]/).map((v) => v.trim()).filter(Boolean) : [];
   return Array.from(new Set([...checked, ...custom]));
-}
-
-function isOpenRouterEndpoint(url: string): boolean {
-  return /openrouter\.ai/i.test(url);
-}
-
-/** OpenRouter 在浏览器里要求 Referer / Title；请求头值必须是 Latin-1，不能含中文 */
-function openRouterExtraHeaders(endpointOrUrl: string): Record<string, string> {
-  if (!isOpenRouterEndpoint(endpointOrUrl)) return {};
-  return {
-    "HTTP-Referer": `${window.location.origin}/`,
-    "X-OpenRouter-Title": "Dream Journal",
-  };
-}
-
-function wrapFetchError(err: unknown): Error {
-  if (err instanceof DOMException && err.name === "AbortError") {
-    return new Error("AI 请求超时（25秒），请重试或更换模型");
-  }
-  const msg = err instanceof Error ? err.message : String(err);
-  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
-    return new Error(
-      "直连 API 失败（Failed to fetch）。OpenRouter 已改为走 Supabase 代理；若仍失败请检查网络或 Supabase 项目是否可访问。",
-    );
-  }
-  return err instanceof Error ? err : new Error(msg);
-}
-
-/** OpenRouter / Supabase 网关常返回嵌套 JSON，避免 String(object) → [object Object] */
-function formatProxyErrorBody(parsed: unknown, rawText: string): string {
-  const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
-  const asString = (v: unknown): string | null => {
-    if (v == null) return null;
-    if (typeof v === "string") return v;
-    if (typeof v === "number" || typeof v === "boolean") return String(v);
-    if (typeof v === "object") {
-      try {
-        return JSON.stringify(v);
-      } catch {
-        return String(v);
-      }
-    }
-    return String(v);
-  };
-  if (parsed !== null && typeof parsed === "object") {
-    const o = parsed as Record<string, unknown>;
-    const meta = o.metadata;
-    const rawFromMeta =
-      meta !== null && typeof meta === "object" ? asString((meta as Record<string, unknown>).raw) : null;
-    const parts = [
-      asString(o.message),
-      rawFromMeta,
-      asString(o.error),
-      asString(o.msg),
-      asString(o.hint),
-      asString(o.code),
-    ].filter((s): s is string => Boolean(s));
-    if (parts.length) return parts.join(" · ");
-  }
-  const fallback = asString(parsed);
-  return clip(fallback || rawText, 400);
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException("Aborted", "AbortError"));
-      return;
-    }
-    const onAbort = () => {
-      window.clearTimeout(t);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    const t = window.setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/** 始终用 fetch 调 Edge Function，不依赖 supabase-js 是否初始化成功 */
-async function callOpenRouterProxy(body: Record<string, unknown>): Promise<unknown> {
-  const supa = getSupabaseConfig();
-  if (!supa.url || !supa.anonKey) {
-    throw new Error("缺少 Supabase URL/Key，无法调用 AI 代理。请展开「账号与云端存储」保存配置。");
-  }
-  const url = `${supa.url.replace(/\/+$/, "")}/functions/v1/openrouter-proxy`;
-  const maxAttempts = 3;
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 32000);
-  try {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt > 0) {
-        const wait = 1800 * attempt;
-        await sleep(wait, controller.signal);
-      }
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${supa.anonKey}`,
-          apikey: supa.anonKey,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await resp.text();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text) as unknown;
-      } catch {
-        throw new Error(`代理返回非 JSON：${text.slice(0, 160)}`);
-      }
-      if (resp.ok) return parsed;
-
-      const retryable = resp.status === 429 || resp.status === 503;
-      if (retryable && attempt < maxAttempts - 1) continue;
-
-      const detail = formatProxyErrorBody(parsed, text);
-      let msg = `AI 代理失败（${resp.status}）：${detail}`;
-      if (resp.status === 404) {
-        msg +=
-          "（404 多来自 OpenRouter：请检查模型 ID 是否在设置里填写正确，或到 OpenRouter 模型列表核对当前可用名称。若从未部署过 Edge Function，请确认 Supabase URL 与已部署代理的项目一致。）";
-      }
-      if (resp.status === 429) {
-        msg +=
-          "（429 为上游限流：免费模型常共用额度，已自动重试仍失败时请隔几分钟再试、在设置里更换其它 :free 模型，或在 OpenRouter → Settings → Integrations 绑定供应商自有 Key 以单独累计额度。）";
-      }
-      throw new Error(msg);
-    }
-    throw new Error("AI 代理失败：重试用尽");
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error("AI 代理请求超时（约 32 秒，含限流重试）");
-    }
-    throw err;
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
-async function askAi(prompt: string): Promise<string> {
-  const cfg = getAiConfig();
-  const endpoint = normalizeAiEndpoint(cfg.endpoint);
-  if (!endpoint || !cfg.apiKey || !cfg.model) throw new Error("请先保存完整 AI 设置");
-  const messages = [
-    { role: "system", content: "你是温柔、克制、善于心理象征分析的梦境分析助手。" },
-    { role: "user", content: prompt },
-  ];
-
-  if (isOpenRouterEndpoint(endpoint)) {
-    const data = (await callOpenRouterProxy({
-      mode: "chat",
-      model: cfg.model,
-      messages,
-      temperature: 0.8,
-      openrouter_api_key: cfg.apiKey,
-    })) as { choices?: Array<{ message?: { content?: string } }>; error?: string };
-    if (data.error) throw new Error(String(data.error));
-    return data.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
-  }
-
-  const payload = JSON.stringify({
-    model: cfg.model,
-    temperature: 0.8,
-    messages,
-  });
-
-  const postHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${cfg.apiKey}`,
-    ...openRouterExtraHeaders(endpoint),
-  };
-
-  const postWithTimeout = async (url: string): Promise<Response> => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 25000);
-    try {
-      return await fetch(url, {
-        method: "POST",
-        headers: postHeaders,
-        body: payload,
-        signal: controller.signal,
-      });
-    } catch (err) {
-      throw wrapFetchError(err);
-    } finally {
-      window.clearTimeout(timer);
-    }
-  };
-
-  let resp = await postWithTimeout(endpoint);
-
-  // Volcengine users often save a partial endpoint in local storage.
-  // On 404, retry once with the canonical Ark chat-completions URL.
-  if (!resp.ok && resp.status === 404) {
-    const fallback = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
-    if (endpoint !== fallback) {
-      resp = await postWithTimeout(fallback);
-    }
-  }
-  if (!resp.ok) {
-    let detail = "";
-    try {
-      detail = (await resp.text()).slice(0, 300);
-    } catch {
-      detail = "";
-    }
-    throw new Error(`AI 请求失败：${resp.status}${detail ? ` - ${detail}` : ""}`);
-  }
-  const json = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return json.choices?.[0]?.message?.content?.trim() || "AI 未返回内容";
 }
 
 function rangeDays(period: ReviewPeriod): number {
@@ -692,19 +432,6 @@ function bindEvents(): void {
     if (!titleEl || !contentEl) return;
     if (titleEl.value.trim()) return;
     titleEl.value = autoTitleFromContent(contentEl.value);
-  });
-
-  document.querySelector("#save-ai")?.addEventListener("click", () => {
-    const endpointRaw = (document.querySelector<HTMLInputElement>("#ai-endpoint")?.value ?? "").trim();
-    const endpoint = normalizeAiEndpoint(endpointRaw);
-    const endpointEl = document.querySelector<HTMLInputElement>("#ai-endpoint");
-    if (endpointEl) endpointEl.value = endpoint;
-    saveAiConfig({
-      endpoint,
-      apiKey: (document.querySelector<HTMLInputElement>("#ai-key")?.value ?? "").trim(),
-      model: (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim(),
-    });
-    alert("AI 设置已保存");
   });
 
   document.querySelector("#save-supa")?.addEventListener("click", async () => {
@@ -819,20 +546,6 @@ function bindEvents(): void {
     render();
   });
 
-  document.querySelector("#run-review-ai")?.addEventListener("click", async () => {
-    const period = (document.querySelector<HTMLSelectElement>("#review-period")?.value ?? "week") as ReviewPeriod;
-    const days = rangeDays(period);
-    const target = dreams.filter((d) => Date.now() - new Date(d.date).getTime() <= days * 24 * 3600 * 1000);
-    try {
-      reviewResult = await askAi(
-        `请对我近${days}天的梦境做回顾，结构：1)主导情绪 2)潜在生活议题 3)自我照顾建议。\n数据：${JSON.stringify(target)}`,
-      );
-      render();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "AI 回顾失败");
-    }
-  });
-
   document.querySelector("#build-story")?.addEventListener("click", () => {
     const picked = pickedDreamsForStory();
     if (!picked.length) return alert("请先勾选至少 1 条梦境");
@@ -852,6 +565,7 @@ function bindEvents(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  localStorage.removeItem("dream-journal-ai-config");
   await initSupabaseFromConfig();
   if (supabaseClient) {
     supabaseClient.auth.onAuthStateChange(async (event, session) => {

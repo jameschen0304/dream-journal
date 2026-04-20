@@ -148,7 +148,7 @@ textarea { min-height: 84px; resize: vertical; }
   line-height: 1.6;
   font-family: inherit;
 }
-.ai-box {
+.interpret-box {
   margin-top: 8px;
   border: 1px solid #bde0ca;
   border-radius: 10px;
