@@ -121,36 +121,49 @@ function normalizeMoodTags(raw: unknown): string[] {
   return [];
 }
 
+function asNonEmptyString(v: unknown): string | null {
+  if (typeof v === "string" && v.trim()) return v;
+  return null;
+}
+
+function asStringField(v: unknown, fallback = ""): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return fallback;
+}
+
+/** Supabase timestamptz 等字段在部分客户端可能不是 string */
+function asIsoString(v: unknown): string | null {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (typeof v === "number" && Number.isFinite(v)) return new Date(v).toISOString();
+  return null;
+}
+
 function parseDreamArray(v: unknown): Dream[] {
   if (!Array.isArray(v)) return [];
   return v
     .map((x) => {
       if (!x || typeof x !== "object") return null;
       const o = x as Record<string, unknown>;
-      if (
-        typeof o.id !== "string" ||
-        typeof o.date !== "string" ||
-        typeof o.title !== "string" ||
-        typeof o.content !== "string" ||
-        typeof o.life_context !== "string" ||
-        typeof o.ai_interpretation !== "string" ||
-        typeof o.created_at !== "string" ||
-        typeof o.updated_at !== "string"
-      ) {
-        return null;
-      }
+      const id = asNonEmptyString(o.id);
+      const date = asNonEmptyString(o.date);
+      const content = asNonEmptyString(o.content);
+      if (!id || !date || !content) return null;
+      const created = asIsoString(o.created_at);
+      const updated = asIsoString(o.updated_at);
+      if (!created || !updated) return null;
       const mood_tags = normalizeMoodTags(o.mood_tags);
       return {
-        id: o.id,
+        id,
         user_id: typeof o.user_id === "string" ? o.user_id : undefined,
-        date: o.date,
-        title: o.title,
-        content: o.content,
-        life_context: o.life_context,
+        date,
+        title: asStringField(o.title),
+        content,
+        life_context: asStringField(o.life_context),
         mood_tags,
-        ai_interpretation: o.ai_interpretation,
-        created_at: o.created_at,
-        updated_at: o.updated_at,
+        ai_interpretation: asStringField(o.ai_interpretation),
+        created_at: created,
+        updated_at: updated,
       } satisfies Dream;
     })
     .filter((x): x is Dream => x !== null);
@@ -170,11 +183,22 @@ const SUPABASE_DEFAULTS = {
 };
 
 function getSupabaseConfig(): { url: string; anonKey: string } {
-  const saved = getJson<Partial<{ url: string; anonKey: string }>>(SUPABASE_KEY, {});
-  return {
-    url: (saved.url?.trim() || SUPABASE_DEFAULTS.url).trim(),
-    anonKey: (saved.anonKey?.trim() || SUPABASE_DEFAULTS.anonKey).trim(),
-  };
+  const raw = localStorage.getItem(SUPABASE_KEY);
+  if (raw == null) {
+    return { url: SUPABASE_DEFAULTS.url, anonKey: SUPABASE_DEFAULTS.anonKey };
+  }
+  try {
+    const saved = JSON.parse(raw) as Partial<{ url: string; anonKey: string }>;
+    if (saved && typeof saved === "object") {
+      return {
+        url: typeof saved.url === "string" ? saved.url.trim() : "",
+        anonKey: typeof saved.anonKey === "string" ? saved.anonKey.trim() : "",
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { url: SUPABASE_DEFAULTS.url, anonKey: SUPABASE_DEFAULTS.anonKey };
 }
 
 function saveSupabaseConfig(url: string, anonKey: string): void {
@@ -189,12 +213,16 @@ function getAiConfig(): AiConfig {
   });
 }
 
+function saveAiConfig(cfg: AiConfig): void {
+  setJson(AI_KEY, cfg);
+}
+
 async function initSupabaseFromConfig(): Promise<void> {
   const cfg = getSupabaseConfig();
   if (!cfg.url || !cfg.anonKey) {
     supabaseClient = null;
     cloudUserId = null;
-    statusText = "本地模式（未配置 Supabase）";
+    statusText = "本地模式（未配置云端或已清空 URL/Key）";
     return;
   }
   try {
@@ -225,20 +253,26 @@ async function loadDreams(): Promise<void> {
   dreams = loadLocalDreams();
 }
 
-async function persistDreams(): Promise<void> {
+/** null = 未使用云端；true/false = 已登录时本次是否写入云端成功 */
+type PersistResult = { cloudSynced: boolean | null };
+
+async function persistDreams(): Promise<PersistResult> {
+  if (!supabaseClient || !cloudUserId) {
+    saveLocalDreams(dreams);
+    return { cloudSynced: null };
+  }
   try {
-    if (supabaseClient && cloudUserId) {
-      const rows = dreams.map((d) => ({ ...d, user_id: cloudUserId }));
-      const { error } = await supabaseClient.from("dream_entries").upsert(rows, { onConflict: "id" });
-      if (!error) {
-        saveLocalDreams(dreams);
-        return;
-      }
+    const rows = dreams.map((d) => ({ ...d, user_id: cloudUserId }));
+    const { error } = await supabaseClient.from("dream_entries").upsert(rows, { onConflict: "id" });
+    if (!error) {
+      saveLocalDreams(dreams);
+      return { cloudSynced: true };
     }
   } catch {
     // Network / transient Supabase errors should not block local journaling.
   }
   saveLocalDreams(dreams);
+  return { cloudSynced: false };
 }
 
 async function removeDreamById(id: string): Promise<void> {
@@ -251,6 +285,7 @@ async function removeDreamById(id: string): Promise<void> {
 
 function render(): void {
   const supa = getSupabaseConfig();
+  const ai = getAiConfig();
   const edit = editingId ? dreams.find((d) => d.id === editingId) : null;
   const defaultDate = edit?.date ?? new Date().toISOString().slice(0, 10);
 
@@ -271,12 +306,12 @@ function render(): void {
       <b>手动解读：</b>
       <textarea class="manual-interpret" data-id="${escapeHtml(d.id)}" placeholder="你对这条梦的理解、感受和提醒...">${escapeHtml(d.ai_interpretation || "")}</textarea>
       <div class="row-actions">
-        <button class="btn ghost" data-action="save-interpret" data-id="${escapeHtml(d.id)}">保存解读</button>
+        <button type="button" class="btn ghost" data-action="save-interpret" data-id="${escapeHtml(d.id)}">保存解读</button>
       </div>
     </div>
     <div class="row-actions">
-      <button class="btn ghost" data-action="edit" data-id="${escapeHtml(d.id)}">编辑</button>
-      <button class="btn danger" data-action="delete" data-id="${escapeHtml(d.id)}">删除</button>
+      <button type="button" class="btn ghost" data-action="edit" data-id="${escapeHtml(d.id)}">编辑</button>
+      <button type="button" class="btn danger" data-action="delete" data-id="${escapeHtml(d.id)}">删除</button>
     </div>
   </article>`,
         )
@@ -322,8 +357,8 @@ function render(): void {
         <option value="month">近 30 天</option>
         <option value="year">近 365 天</option>
       </select>
-      <button class="btn" id="run-review">生成回顾</button>
-      <button class="btn ghost" id="run-review-ai">AI 深度回顾</button>
+      <button type="button" class="btn" id="run-review">生成回顾</button>
+      <button type="button" class="btn ghost" id="run-review-ai">AI 深度回顾</button>
     </div>
     <div class="output">${escapeHtml(reviewResult || "点击生成回顾")}</div>
   </section>
@@ -332,8 +367,8 @@ function render(): void {
     <h2>故事素材整理</h2>
     <p class="hint">先在梦境卡片勾选素材，再点「生成素材文本」。本模块不调用 AI，只做整理与复制。</p>
     <div class="row-actions">
-      <button class="btn" id="build-story">生成素材文本</button>
-      <button class="btn ghost" id="copy-story">复制文本</button>
+      <button type="button" class="btn" id="build-story">生成素材文本</button>
+      <button type="button" class="btn ghost" id="copy-story">复制文本</button>
     </div>
     <div class="output">${escapeHtml(storyResult || "勾选梦境后可生成可复制的素材文本")}</div>
   </section>
@@ -362,11 +397,24 @@ function render(): void {
         <input id="login-email" placeholder="you@email.com" />
       </div>
       <div class="inline-actions">
-        <button class="btn" id="save-supa">保存配置</button>
-        <button class="btn ghost" id="email-login">发送登录链接</button>
-        <button class="btn ghost" id="logout">退出登录</button>
-        <button class="btn ghost" id="sync-now">立即同步</button>
+        <button type="button" class="btn" id="save-supa">保存配置</button>
+        <button type="button" class="btn ghost" id="email-login">发送登录链接</button>
+        <button type="button" class="btn ghost" id="logout">退出登录</button>
+        <button type="button" class="btn ghost" id="sync-now">立即同步</button>
       </div>
+    </div>
+  </details>
+
+  <details class="panel fold">
+    <summary>AI 设置（可选，用于「AI 深度回顾」）</summary>
+    <p class="hint">OpenRouter 等密钥仅存于本机浏览器。走项目自带 Supabase 代理时无需担心 CORS。</p>
+    <div class="grid3">
+      <div><label>接口地址</label><input id="ai-endpoint" value="${escapeHtml(ai.endpoint)}"/></div>
+      <div><label>API Key</label><input id="ai-key" value="${escapeHtml(ai.apiKey)}" placeholder="sk-or-..." autocomplete="off"/></div>
+      <div><label>模型 ID</label><input id="ai-model" value="${escapeHtml(ai.model)}" placeholder="例如 openai/gpt-4o-mini"/></div>
+    </div>
+    <div class="row-actions">
+      <button type="button" class="btn ghost" id="save-ai">保存 AI 设置</button>
     </div>
   </details>
 
@@ -391,7 +439,7 @@ function openRouterExtraHeaders(endpointOrUrl: string): Record<string, string> {
   if (!isOpenRouterEndpoint(endpointOrUrl)) return {};
   return {
     "HTTP-Referer": `${window.location.origin}/`,
-    "X-Title": "Dream Journal",
+    "X-OpenRouter-Title": "Dream Journal",
   };
 }
 
@@ -646,6 +694,19 @@ function bindEvents(): void {
     titleEl.value = autoTitleFromContent(contentEl.value);
   });
 
+  document.querySelector("#save-ai")?.addEventListener("click", () => {
+    const endpointRaw = (document.querySelector<HTMLInputElement>("#ai-endpoint")?.value ?? "").trim();
+    const endpoint = normalizeAiEndpoint(endpointRaw);
+    const endpointEl = document.querySelector<HTMLInputElement>("#ai-endpoint");
+    if (endpointEl) endpointEl.value = endpoint;
+    saveAiConfig({
+      endpoint,
+      apiKey: (document.querySelector<HTMLInputElement>("#ai-key")?.value ?? "").trim(),
+      model: (document.querySelector<HTMLInputElement>("#ai-model")?.value ?? "").trim(),
+    });
+    alert("AI 设置已保存");
+  });
+
   document.querySelector("#save-supa")?.addEventListener("click", async () => {
     const url = (document.querySelector<HTMLInputElement>("#supa-url")?.value ?? "").trim();
     const key = (document.querySelector<HTMLInputElement>("#supa-key")?.value ?? "").trim();
@@ -705,10 +766,14 @@ function bindEvents(): void {
       };
       if (!item.date || !item.content) return alert("日期和梦境内容必填");
       dreams = sortDreams([...dreams.filter((d) => d.id !== item.id), item]);
-      await persistDreams();
+      const { cloudSynced } = await persistDreams();
       editingId = null;
       render();
-      alert("记录已保存");
+      if (cloudSynced === false) {
+        alert("记录已保存到本机，但云端同步失败，请检查网络或权限后点「立即同步」重试。");
+      } else {
+        alert("记录已保存");
+      }
     } catch (e) {
       alert(e instanceof Error ? `保存失败：${e.message}` : "保存失败，请重试");
     }
@@ -732,11 +797,17 @@ function bindEvents(): void {
         return;
       }
       if (action === "save-interpret") {
-        const input = document.querySelector<HTMLTextAreaElement>(`.manual-interpret[data-id="${CSS.escape(d.id)}"]`);
+        const input = Array.from(document.querySelectorAll<HTMLTextAreaElement>(".manual-interpret")).find(
+          (el) => el.dataset.id === d.id,
+        );
         d.ai_interpretation = (input?.value ?? "").trim();
         d.updated_at = nowIso();
-        await persistDreams();
-        alert("解读已保存");
+        const { cloudSynced } = await persistDreams();
+        if (cloudSynced === false) {
+          alert("解读已保存到本机，但云端同步失败，请稍后点「立即同步」重试。");
+        } else {
+          alert("解读已保存");
+        }
         render();
       }
     });
