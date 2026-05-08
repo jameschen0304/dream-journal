@@ -74,7 +74,27 @@ function getJson<T>(key: string, fallback: T): T {
 }
 
 function setJson(key: string, val: unknown): void {
-  localStorage.setItem(key, JSON.stringify(val));
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {
+    // Safari private mode / quota errors should not break rendering.
+  }
+}
+
+function getLocalRaw(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function removeLocalItem(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage exceptions to keep app usable.
+  }
 }
 
 function sortDreams(list: Dream[]): Dream[] {
@@ -161,7 +181,7 @@ const SUPABASE_DEFAULTS = {
 };
 
 function getSupabaseConfig(): { url: string; anonKey: string } {
-  const raw = localStorage.getItem(SUPABASE_KEY);
+  const raw = getLocalRaw(SUPABASE_KEY);
   if (raw == null) {
     return { url: SUPABASE_DEFAULTS.url, anonKey: SUPABASE_DEFAULTS.anonKey };
   }
@@ -594,7 +614,7 @@ function bindEvents(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  localStorage.removeItem("dream-journal-ai-config");
+  removeLocalItem("dream-journal-ai-config");
   await initSupabaseFromConfig();
   if (supabaseClient) {
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
