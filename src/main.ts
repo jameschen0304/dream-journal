@@ -203,6 +203,10 @@ function saveSupabaseConfig(url: string, anonKey: string): void {
   setJson(SUPABASE_KEY, { url: url.trim(), anonKey: anonKey.trim() });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function initSupabaseFromConfig(): Promise<void> {
   const cfg = getSupabaseConfig();
   if (!cfg.url || !cfg.anonKey) {
@@ -213,7 +217,16 @@ async function initSupabaseFromConfig(): Promise<void> {
   }
   try {
     supabaseClient = createClient(cfg.url, cfg.anonKey);
-    const { data } = await supabaseClient.auth.getUser();
+    const authResult = await Promise.race([
+      supabaseClient.auth.getUser(),
+      sleep(10_000).then(() => ({ __timedOut: true as const })),
+    ]);
+    if (authResult && typeof authResult === "object" && "__timedOut" in authResult) {
+      statusText = "云端连接偏慢，已先使用本地数据（可稍后下拉刷新或点同步）";
+      cloudUserId = null;
+      return;
+    }
+    const { data } = authResult as { data: { user: { id: string; email?: string | null } | null } };
     cloudUserId = data.user?.id ?? null;
     statusText = cloudUserId ? `云端模式（${data.user?.email ?? "已登录"}）` : "云端已配置（未登录）";
   } catch {
@@ -230,8 +243,17 @@ async function stripLegacyTitlesFromStores(): Promise<void> {
 
     dreams = dreams.map((d) => ({ ...d, title: "" }));
     saveLocalDreams(dreams);
-    const { cloudSynced } = await persistDreams();
-    if (cloudSynced !== false) setJson(stripKey, { done: true });
+    // 整表 upsert 可能很慢；放到首屏 render 之后再跑，避免长时间白屏
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          const { cloudSynced } = await persistDreams();
+          if (cloudSynced !== false) setJson(stripKey, { done: true });
+        } catch {
+          /* ignore */
+        }
+      })();
+    });
     return;
   }
 
@@ -242,20 +264,33 @@ async function stripLegacyTitlesFromStores(): Promise<void> {
 
 async function loadDreams(): Promise<void> {
   if (supabaseClient && cloudUserId) {
-    const { data, error } = await supabaseClient
+    const query = supabaseClient
       .from("dream_entries")
       .select("*")
       .eq("user_id", cloudUserId)
       .order("date", { ascending: false })
       .order("created_at", { ascending: false });
+
+    const result = await Promise.race([
+      query,
+      sleep(15_000).then(() => ({ __timedOut: true as const, data: null, error: null })),
+    ]);
+
+    if (result && "__timedOut" in result && result.__timedOut) {
+      dreams = loadLocalDreams();
+      void stripLegacyTitlesFromStores();
+      return;
+    }
+
+    const { data, error } = result as { data: unknown; error: unknown };
     if (!error && Array.isArray(data)) {
       dreams = sortDreams(parseDreamArray(data));
-      await stripLegacyTitlesFromStores();
+      void stripLegacyTitlesFromStores();
       return;
     }
   }
   dreams = loadLocalDreams();
-  await stripLegacyTitlesFromStores();
+  void stripLegacyTitlesFromStores();
 }
 
 /** null = 未使用云端；true/false = 已登录时本次是否写入云端成功 */
@@ -655,4 +690,11 @@ async function bootstrap(): Promise<void> {
   render();
 }
 
-void bootstrap();
+bootstrap().catch((err) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  app.innerHTML = `<section class="panel" style="margin:20px auto;max-width:560px">
+    <h2>启动失败</h2>
+    <p>${escapeHtml(msg)}</p>
+    <p class="hint">可尝试：检查网络、关闭无痕/严格隐私模式、或稍后再打开。若持续失败请清除本站数据后重试。</p>
+  </section>`;
+});

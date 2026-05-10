@@ -26,6 +26,14 @@ body {
   padding: 22px 14px 48px;
 }
 
+.boot-loading {
+  margin: 0;
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 15px;
+}
+
 header h1 {
   margin: 0;
   font-size: 34px;
