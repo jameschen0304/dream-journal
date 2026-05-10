@@ -224,17 +224,20 @@ async function initSupabaseFromConfig(): Promise<void> {
 }
 
 async function stripLegacyTitlesFromStores(): Promise<void> {
+  if (supabaseClient && cloudUserId) {
+    const stripKey = titleStripStorageKey(cloudUserId);
+    if (getJson<{ done?: boolean }>(stripKey, {}).done) return;
+
+    dreams = dreams.map((d) => ({ ...d, title: "" }));
+    saveLocalDreams(dreams);
+    const { cloudSynced } = await persistDreams();
+    if (cloudSynced !== false) setJson(stripKey, { done: true });
+    return;
+  }
+
+  if (!dreams.some((d) => (d.title ?? "").trim() !== "")) return;
   dreams = dreams.map((d) => ({ ...d, title: "" }));
   saveLocalDreams(dreams);
-
-  if (!supabaseClient || !cloudUserId) return;
-  const stripKey = titleStripStorageKey(cloudUserId);
-  if (getJson<{ done?: boolean }>(stripKey, {}).done) return;
-
-  const { cloudSynced } = await persistDreams();
-  if (cloudSynced !== false) {
-    setJson(stripKey, { done: true });
-  }
 }
 
 async function loadDreams(): Promise<void> {
@@ -414,8 +417,6 @@ function render(): void {
   </details>
 
   `;
-
-  bindEvents();
 }
 
 function selectedTagsFromForm(): string[] {
@@ -485,45 +486,15 @@ function buildStoryMaterialText(picked: Dream[]): string {
   return [`梦境素材汇总（共 ${picked.length} 条）`, ...blocks].join("\n\n");
 }
 
-function bindEvents(): void {
-  document.querySelector("#save-supa")?.addEventListener("click", async () => {
-    const url = (document.querySelector<HTMLInputElement>("#supa-url")?.value ?? "").trim();
-    const key = (document.querySelector<HTMLInputElement>("#supa-key")?.value ?? "").trim();
-    saveSupabaseConfig(url, key);
-    await initSupabaseFromConfig();
-    await loadDreams();
-    render();
-  });
+let appDelegatedEventsBound = false;
 
-  document.querySelector("#email-login")?.addEventListener("click", async () => {
-    if (!supabaseClient) return alert("请先保存 Supabase 配置");
-    const email = (document.querySelector<HTMLInputElement>("#login-email")?.value ?? "").trim();
-    if (!email) return alert("请输入邮箱");
-    const { error } = await supabaseClient.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
-    alert(error ? `发送失败：${error.message}` : "登录链接已发送到邮箱");
-  });
+function setupAppDelegatedEvents(): void {
+  if (appDelegatedEventsBound) return;
+  appDelegatedEventsBound = true;
 
-  document.querySelector("#logout")?.addEventListener("click", async () => {
-    if (!supabaseClient) return;
-    await supabaseClient.auth.signOut();
-    cloudUserId = null;
-    statusText = "云端已配置（未登录）";
-    await loadDreams();
-    render();
-  });
-
-  document.querySelector("#sync-now")?.addEventListener("click", async () => {
-    await loadDreams();
-    render();
-    alert("同步完成");
-  });
-
-  document.querySelector("#new-dream")?.addEventListener("click", () => {
-    editingId = null;
-    render();
-  });
-
-  document.querySelector("#dream-form")?.addEventListener("submit", async (ev) => {
+  app.addEventListener("submit", async (ev) => {
+    const form = ev.target as HTMLElement | null;
+    if (!form || form.id !== "dream-form") return;
     ev.preventDefault();
     try {
       const id = (document.querySelector<HTMLInputElement>("#dream-id")?.value ?? "").trim() || crypto.randomUUID();
@@ -555,10 +526,14 @@ function bindEvents(): void {
     }
   });
 
-  document.querySelectorAll<HTMLElement>("[data-action]").forEach((el) => {
-    el.addEventListener("click", async () => {
-      const action = el.dataset.action;
-      const id = el.dataset.id;
+  app.addEventListener("click", async (ev) => {
+    const t = ev.target as HTMLElement | null;
+    if (!t) return;
+
+    const actionHost = t.closest<HTMLElement>("[data-action]");
+    if (actionHost?.dataset.action && actionHost.dataset.id) {
+      const action = actionHost.dataset.action;
+      const id = actionHost.dataset.id;
       const d = dreams.find((x) => x.id === id);
       if (!d) return;
       if (action === "edit") {
@@ -586,35 +561,81 @@ function bindEvents(): void {
         }
         render();
       }
-    });
-  });
+      return;
+    }
 
-  document.querySelector("#run-review")?.addEventListener("click", () => {
-    const period = (document.querySelector<HTMLSelectElement>("#review-period")?.value ?? "week") as ReviewPeriod;
-    reviewResult = makeReview(period);
-    render();
-  });
+    if (t.closest("#save-supa")) {
+      const url = (document.querySelector<HTMLInputElement>("#supa-url")?.value ?? "").trim();
+      const key = (document.querySelector<HTMLInputElement>("#supa-key")?.value ?? "").trim();
+      saveSupabaseConfig(url, key);
+      await initSupabaseFromConfig();
+      await loadDreams();
+      render();
+      return;
+    }
 
-  document.querySelector("#build-story")?.addEventListener("click", () => {
-    const picked = pickedDreamsForStory();
-    if (!picked.length) return alert("请先勾选至少 1 条梦境");
-    storyResult = buildStoryMaterialText(picked);
-    render();
-  });
+    if (t.closest("#email-login")) {
+      if (!supabaseClient) return alert("请先保存 Supabase 配置");
+      const email = (document.querySelector<HTMLInputElement>("#login-email")?.value ?? "").trim();
+      if (!email) return alert("请输入邮箱");
+      const { error } = await supabaseClient.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
+      alert(error ? `发送失败：${error.message}` : "登录链接已发送到邮箱");
+      return;
+    }
 
-  document.querySelector("#copy-story")?.addEventListener("click", async () => {
-    if (!storyResult.trim()) return alert("请先生成素材文本");
-    try {
-      await navigator.clipboard.writeText(storyResult);
-      alert("已复制到剪贴板");
-    } catch {
-      alert("复制失败，请手动全选输出文本复制");
+    if (t.closest("#logout")) {
+      if (!supabaseClient) return;
+      await supabaseClient.auth.signOut();
+      cloudUserId = null;
+      statusText = "云端已配置（未登录）";
+      await loadDreams();
+      render();
+      return;
+    }
+
+    if (t.closest("#sync-now")) {
+      await loadDreams();
+      render();
+      alert("同步完成");
+      return;
+    }
+
+    if (t.closest("#new-dream")) {
+      editingId = null;
+      render();
+      return;
+    }
+
+    if (t.closest("#run-review")) {
+      const period = (document.querySelector<HTMLSelectElement>("#review-period")?.value ?? "week") as ReviewPeriod;
+      reviewResult = makeReview(period);
+      render();
+      return;
+    }
+
+    if (t.closest("#build-story")) {
+      const picked = pickedDreamsForStory();
+      if (!picked.length) return alert("请先勾选至少 1 条梦境");
+      storyResult = buildStoryMaterialText(picked);
+      render();
+      return;
+    }
+
+    if (t.closest("#copy-story")) {
+      if (!storyResult.trim()) return alert("请先生成素材文本");
+      try {
+        await navigator.clipboard.writeText(storyResult);
+        alert("已复制到剪贴板");
+      } catch {
+        alert("复制失败，请手动全选输出文本复制");
+      }
     }
   });
 }
 
 async function bootstrap(): Promise<void> {
   removeLocalItem("dream-journal-ai-config");
+  setupAppDelegatedEvents();
   await initSupabaseFromConfig();
   if (supabaseClient) {
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
